@@ -23,6 +23,7 @@ import { handleManagementAction } from "../../agents/agent-management.ts";
 import { handleRefinementAction } from "../../agents/agent-refinements.ts";
 import { buildDoctorReport } from "../../extension/doctor.ts";
 import { readSubagentGuide } from "../../extension/subagent-guide.ts";
+import { createDirectTaskAgent, DIRECT_TASK_AGENT, directTaskOptionsFromAgent, hasDirectTaskOptions, parseDirectTaskOptions, persistDirectTaskOptions, readDirectTaskOptions, type DirectTaskOptions } from "../../agents/direct-task.ts";
 import { normalizePublicSubagentExecution, validateWorkflowCapacityOverrides } from "../../extension/public-execution.ts";
 import { runSync } from "./execution.ts";
 import { handleWatchdogToolAction, WATCHDOG_TOOL_ACTIONS } from "../../watchdog/tool-actions.ts";
@@ -308,7 +309,7 @@ interface TaskParam {
 	toolBudget?: ToolBudgetConfig;
 }
 
-export interface SubagentParamsLike {
+export interface SubagentParamsLike extends DirectTaskOptions {
 	action?: string;
 	id?: string;
 	runId?: string;
@@ -759,8 +760,9 @@ function foregroundChildActivityFromProgress(progress: SingleResult["progress"] 
 	};
 }
 
-function rememberForegroundRun(state: SubagentState, input: { modelResponseAliases?: Record<string, string[]>; runId: string; mode: "single" | "parallel" | "chain"; cwd: string; sessionId: string | null; results: SingleResult[]; params: SubagentParamsLike; effectiveOutput?: string | boolean; effectiveOutputMode: OutputMode; extensionBindings?: ExtensionBindings; requiredExtensions?: SteeringRecoveryDescriptor["requiredExtensions"] }): void {
+function rememberForegroundRun(state: SubagentState, input: { modelResponseAliases?: Record<string, string[]>; runId: string; mode: "single" | "parallel" | "chain"; cwd: string; sessionId: string | null; results: SingleResult[]; params: SubagentParamsLike; effectiveOutput?: string | boolean; effectiveOutputMode: OutputMode; extensionBindings?: ExtensionBindings; requiredExtensions?: SteeringRecoveryDescriptor["requiredExtensions"] }): string | undefined {
 	state.foregroundRuns ??= new Map();
+	const resumeWarnings: string[] = [];
 	const previous = state.foregroundRuns.get(input.runId);
 	const updatedAt = Date.now();
 	state.foregroundRuns.set(input.runId, {
@@ -770,7 +772,16 @@ function rememberForegroundRun(state: SubagentState, input: { modelResponseAlias
 		...(input.sessionId ? { sessionId: input.sessionId } : {}),
 		updatedAt,
 		children: input.results.map((result, index) => {
+			let directTaskPath: string | undefined;
+			if (result.agent === DIRECT_TASK_AGENT && result.sessionFile) {
+				try {
+					directTaskPath = persistDirectTaskOptions(result.sessionFile, directTaskOptionsFromAgent(createDirectTaskAgent(input.params, input.cwd)));
+				} catch (error) {
+					resumeWarnings.push(`Cannot retain direct task configuration for child ${index}: ${error instanceof Error ? error.message : String(error)}. This child cannot resume.`);
+				}
+			}
 			const resumeContract = omitUndefinedProperties({
+				directTaskPath,
 				modelResponseAliases: input.modelResponseAliases,
 				outputSchema: input.params.outputSchema,
 				agentContract: input.params.agentContract,
@@ -824,6 +835,7 @@ function rememberForegroundRun(state: SubagentState, input: { modelResponseAlias
 	});
 	trimRememberedForegroundRuns(state);
 	persistRememberedForegroundRuns(state);
+	return resumeWarnings.length > 0 ? resumeWarnings.join("\n") : undefined;
 }
 
 function applyControlEventToRememberedForegroundRun(state: SubagentState, event: ControlEvent): void {
@@ -1815,9 +1827,9 @@ async function resumeAsyncRun(input: {
 	signal?: AbortSignal;
 	onLaunch?: (launch: { agent: string; sessionName?: string; sessionFile?: string; async: boolean; runId?: string }) => void;
 }): Promise<AgentToolResult<Details>> {
-	const followUp = (input.params.message ?? input.params.task ?? "").trim();
+	const requestedFollowUp = input.params.message ?? input.params.task ?? "";
 	const attachChain = (input.params.chain?.length ?? 0) > 0 ? input.params.chain as ChainStep[] : undefined;
-	if (!followUp && !attachChain) {
+	if (!requestedFollowUp.trim() && !attachChain) {
 		return {
 			content: [{ type: "text", text: "action='resume' requires message." }],
 			isError: true,
@@ -1845,13 +1857,17 @@ async function resumeAsyncRun(input: {
 	const parentSessionFile = input.ctx.sessionManager.getSessionFile() ?? null;
 	try {
 		const resolved = resolveRequestedResumeTarget(input.params, input.deps, parentSessionFile);
-		if (resolved.kind === "live-nested") return resumeLiveNestedRun({ target: resolved.target, message: followUp });
+		if (resolved.kind === "live-nested") {
+			const message = resolved.target.match.run.agent === DIRECT_TASK_AGENT ? requestedFollowUp : requestedFollowUp.trim();
+			return resumeLiveNestedRun({ target: resolved.target, message });
+		}
 		target = resolved;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		return { content: [{ type: "text", text: message }], isError: true, details: { mode: "management", results: [] } };
 	}
 
+	const followUp = target.agent === DIRECT_TASK_AGENT ? requestedFollowUp : requestedFollowUp.trim();
 	if (target.kind === "live" && !attachChain) {
 		return {
 			content: [{
@@ -1889,7 +1905,7 @@ async function resumeAsyncRun(input: {
 		?? (input.params.context === "profile" ? undefined : input.params.context);
 	const intercomBridge = resolveIntercomBridge({
 		config: input.deps.config.intercomBridge,
-		override: input.params.intercomBridge ?? recoveryDescriptor?.intercomBridge,
+		override: input.params.intercomBridge ?? recoveryDescriptor?.intercomBridge ?? (target.agent === DIRECT_TASK_AGENT ? { mode: "off" } : undefined),
 		context: recoveryContext,
 		orchestratorTarget: sessionName,
 	});
@@ -1897,7 +1913,19 @@ async function resumeAsyncRun(input: {
 		? discoveredAgents.map((agent) => applyIntercomBridgeToAgent(agent, intercomBridge))
 		: discoveredAgents;
 	const discoveredAgentConfig = discoveredAgents.find((agent) => agent.name === target.agent);
-	const baseAgentConfig: AgentConfig | undefined = discoveredAgentConfig ?? (recoveryDescriptor ? {
+	let retainedDirectTask: DirectTaskOptions | undefined;
+	const directTaskPath = target.source === "foreground" ? target.resumeContract?.directTaskPath : undefined;
+	if (target.agent === DIRECT_TASK_AGENT && directTaskPath !== undefined) {
+		const parsed = readDirectTaskOptions(directTaskPath);
+		if (!parsed.ok) return { content: [{ type: "text", text: parsed.error }], isError: true, details: { mode: "management", results: [] } };
+		retainedDirectTask = parsed.options;
+	}
+	if (target.agent === DIRECT_TASK_AGENT && retainedDirectTask === undefined && recoveryDescriptor === undefined) {
+		return { content: [{ type: "text", text: "Cannot resume a direct task without its retained execution configuration. Start a new task." }], isError: true, details: { mode: "management", results: [] } };
+	}
+	const baseAgentConfig: AgentConfig | undefined = target.agent === DIRECT_TASK_AGENT
+		? createDirectTaskAgent(retainedDirectTask ?? {}, effectiveCwd)
+		: discoveredAgentConfig ?? (recoveryDescriptor ? {
 		name: recoveryDescriptor.agent,
 		description: "Persisted async recovery contract",
 		systemPrompt: "",
@@ -2179,7 +2207,7 @@ async function resumeAsyncRun(input: {
 		worktree: input.params.worktree === true && !("managedWorktree" in target && target.managedWorktree === true),
 		lane: input.params.lane ?? recoveryDescriptor?.lane,
 		controlConfig: resolveRevivalControlConfig({ globalConfig: input.deps.config.control, requestedControl: input.params.control, recoveryControlConfig: recoveryDescriptor?.controlConfig }),
-		intercomBridge: input.params.intercomBridge ?? recoveryDescriptor?.intercomBridge,
+		intercomBridge: input.params.intercomBridge ?? recoveryDescriptor?.intercomBridge ?? (target.agent === DIRECT_TASK_AGENT ? { mode: "off" } : undefined),
 		controlIntercomTarget: intercomBridge.active ? intercomBridge.orchestratorTarget : undefined,
 		childIntercomTarget: intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
 		availableModels,
@@ -3402,7 +3430,7 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		if (launchRuleError) return toExecutionErrorResult(params, new Error(launchRuleError), data.contextPolicy.contextSummary);
 		const asyncResult = await executeAsyncSingle(id, compactOptional<Parameters<typeof executeAsyncSingle>[1]>({
 			agent: params.agent!,
-			task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
+			task: params.agent !== DIRECT_TASK_AGENT && shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
 			goal: params.task ?? "",
 			agentConfig: a,
 			recoveryAgentConfig: data.recoveryAgents.find((agent) => agent.name === params.agent),
@@ -3955,7 +3983,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	}
 
 	const authoredTask = task;
-	if (shouldForkAgent(contextPolicy, params.agent!)) {
+	if (params.agent !== DIRECT_TASK_AGENT && shouldForkAgent(contextPolicy, params.agent!)) {
 		task = wrapForkTask(task);
 	}
 	const cleanTask = task;
@@ -4208,7 +4236,9 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		usageBudget: usageBudgetState(data.usageBudget, totalCost),
 		...(worktreeHandoff?.reference ? { parallelHandoff: worktreeHandoff.reference } : {}),
 	}));
-	rememberForegroundRun(deps.state, { modelResponseAliases, runId, mode: "single", cwd: singleCwd, sessionId: data.parentSessionId, results: details.results, params, effectiveOutput, effectiveOutputMode, extensionBindings: params.extensionBindings, requiredExtensions });
+	const resumeWarning = rememberForegroundRun(deps.state, { modelResponseAliases, runId, mode: "single", cwd: singleCwd, sessionId: data.parentSessionId, results: details.results, params, effectiveOutput, effectiveOutputMode, extensionBindings: params.extensionBindings, requiredExtensions });
+	if (resumeWarning) details.resumeWarning = resumeWarning;
+	const resumeWarningSuffix = resumeWarning ? `\n\n${resumeWarning}` : "";
 
 	const suppressRoutineResultIntercom = shouldSuppressRoutineResultIntercom({ suppressRoutineResultIntercom: params.suppressRoutineResultIntercom, results: [r] });
 	if (!r.detached && !r.interrupted && !suppressRoutineResultIntercom) {
@@ -4224,14 +4254,14 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		});
 		if (intercomReceipt) {
 			return {
-				content: [{ type: "text", text: intercomReceipt.text }],
+				content: [{ type: "text", text: `${intercomReceipt.text}${resumeWarningSuffix}` }],
 				details: intercomReceipt.details,
 				...(r.exitCode !== 0 ? { isError: true } : {}),
 			};
 		}
 	}
 
-	const worktreeSuffix = worktreeHandoff?.suffix ? `\n\n${worktreeHandoff.suffix}` : "";
+	const resultSuffix = (worktreeHandoff?.suffix ? `\n\n${worktreeHandoff.suffix}` : "") + resumeWarningSuffix;
 	if (r.detached) {
 		const statusRecovery = `subagent({ action: "status", id: "${runId}" }) to recover the result; do not resume or launch a replacement while it remains detached.`;
 		const blockingRecovery = `bg_wait({ id: "${runId}" }). Use ${statusRecovery}`;
@@ -4241,26 +4271,26 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				? `Detached at user request: ${params.agent}. The child continues independently. Register a completion wake-up with bg_wait({ id: "${runId}", nonBlocking: true }), or use ${statusRecovery}`
 				: `Detached before task completion: ${params.agent}. Wait with ${blockingRecovery}`;
 		return {
-			content: [{ type: "text", text: `${message}${worktreeSuffix}` }],
+			content: [{ type: "text", text: `${message}${resultSuffix}` }],
 			details,
 		};
 	}
 
 	if (r.interrupted) {
 		return {
-			content: [{ type: "text", text: `Run paused after interrupt (${params.agent}). Waiting for explicit next action.${worktreeSuffix}` }],
+			content: [{ type: "text", text: `Run paused after interrupt (${params.agent}). Waiting for explicit next action.${resultSuffix}` }],
 			details,
 		};
 	}
 
 	if (r.exitCode !== 0)
 		return {
-			content: [{ type: "text", text: `${formatFailedSingleRunOutput(r, finalizedOutput.displayOutput)}${worktreeSuffix}` }],
+			content: [{ type: "text", text: `${formatFailedSingleRunOutput(r, finalizedOutput.displayOutput)}${resultSuffix}` }],
 			details,
 			isError: true,
 		};
 	return {
-		content: [{ type: "text", text: `${finalizedOutput.displayOutput || "(no output)"}${worktreeSuffix}` }],
+		content: [{ type: "text", text: `${finalizedOutput.displayOutput || "(no output)"}${resultSuffix}` }],
 		details,
 	};
 }
@@ -4398,7 +4428,9 @@ function workflowChildResult(
 	const resolvedContexts = [...new Set(result.details.results.map((child) => child.context).filter((context): context is "fresh" | "fork" => context === "fresh" || context === "fork"))];
 	const runId = result.details.runId ?? result.details.asyncId;
 	let resumability: WorkflowScriptChildResult["resumability"];
-	if (!runId || !resumeState) {
+	if (result.details.resumeWarning) {
+		resumability = { state: "not-resumable", reason: result.details.resumeWarning };
+	} else if (!runId || !resumeState) {
 		resumability = { state: "not-resumable", reason: runId ? "resumability was not inspected" : "child produced no run id" };
 	} else {
 		try {
@@ -4436,6 +4468,7 @@ function workflowChildResult(
 		...(resolvedAgents.length === 1 ? { agent: resolvedAgents[0] } : {}),
 		...(runId ? { runId } : {}),
 		output,
+		...(result.details.resumeWarning ? { resumeWarning: result.details.resumeWarning } : {}),
 		...(!ok && !running ? { error: failureError } : {}),
 		...(detached ? { detached: true } : {}),
 		...(interrupted ? { interrupted: true } : {}),
@@ -4765,6 +4798,7 @@ export function prepareWorkflowLaunchParams(
 		? undefined
 		: Math.max(1, options.parentDeadlineAt - Date.now());
 	if (typeof childParams.resume === "string") {
+		if (hasDirectTaskOptions(childParams)) throw new Error("Direct task options cannot change on resume; resume uses the retained execution configuration.");
 		if (childParams.extensionBindings !== undefined || workflowDefaults.extensionBindings !== undefined) {
 			throw new Error("extensionBindings is not supported with retained resume; resume uses the original retained child binding.");
 		}
@@ -4790,7 +4824,7 @@ export function prepareWorkflowLaunchParams(
 			action: "resume",
 			id: childParams.resume.trim(),
 			...(typeof childParams.index === "number" && Number.isInteger(childParams.index) ? { index: childParams.index } : {}),
-			message: typeof childParams.task === "string" ? childParams.task.trim() : "",
+			message: typeof childParams.task === "string" ? childParams.task : "",
 			workflowParentRunId: parentWorkflowRunId,
 			workflowKey,
 			...(options.outputClaimPath ? { workflowOutputClaimPath: options.outputClaimPath } : {}),
@@ -4818,7 +4852,7 @@ export function prepareWorkflowLaunchParams(
 		...(options.externalAsyncRequired === true && asyncOmitted ? { async: true } : {}),
 		...childParams,
 		...(control !== undefined ? { control } : {}),
-		...(asyncOmitted ? { workflowAwaitAsync: true } : {}),
+		...(asyncOmitted || (childParams.agent ?? workflowDefaults.agent) === undefined ? { workflowAwaitAsync: true } : {}),
 		...(options.missionDetached ? { mission: false } : {}),
 		workflowParentRunId: parentWorkflowRunId,
 		workflowKey,
@@ -7009,7 +7043,25 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const effectiveCwd = effectiveParams.cwd ?? ctx.cwd;
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 		const discovered = deps.discoverAgents(effectiveCwd, scope, requestParentModel?.provider);
-		const discoveredAgents = discovered.agents;
+		let discoveredAgents = discovered.agents;
+		if (effectiveParams.agent === undefined && effectiveParams.task !== undefined && !effectiveParams.chain && !effectiveParams.tasks) {
+			if (typeof effectiveParams.task !== "string" || !effectiveParams.task.trim()) return buildRequestedModeError(effectiveParams, "Direct execution requires a non-empty task.");
+			const parsed = parseDirectTaskOptions(effectiveParams);
+			if (!parsed.ok) return buildRequestedModeError(effectiveParams, parsed.error);
+			const agent = createDirectTaskAgent(parsed.options, effectiveCwd);
+			discoveredAgents = [agent, ...discoveredAgents.filter(entry => entry.name !== DIRECT_TASK_AGENT)];
+			effectiveParams = {
+				...effectiveParams,
+				...directTaskOptionsFromAgent(agent),
+				agent: DIRECT_TASK_AGENT,
+				context: effectiveParams.context ?? "fresh",
+				output: effectiveParams.output ?? false,
+				agentContract: effectiveParams.agentContract ?? { version: 1 },
+				intercomBridge: effectiveParams.intercomBridge ?? { mode: "off" },
+			};
+		} else if (effectiveParams.agent === DIRECT_TASK_AGENT || hasDirectTaskOptions(effectiveParams)) {
+			return buildRequestedModeError(effectiveParams, "Direct task options require omitting agent; named profiles supply their own execution configuration.");
+		}
 		const unknownAgentDiagnosticContext = diagnosticContextFromDiscovery(discovered, effectiveCwd, scope);
 		const canonicalParams = canonicalizeExecutionParams(effectiveParams, discoveredAgents, discovered.agentDiagnostics, unknownAgentDiagnosticContext);
 		if (canonicalParams.error) return buildRequestedModeError(effectiveParams, canonicalParams.error);

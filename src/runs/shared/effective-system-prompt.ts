@@ -1,3 +1,4 @@
+import { DIRECT_TASK_AGENT } from "../../agents/direct-task.ts";
 import type { AgentConfig } from "../../agents/agents.ts";
 import { buildAgentMemoryInjection } from "../../agents/agent-memory.ts";
 import { appendAgentRefinementOverlay } from "../../agents/agent-refinements.ts";
@@ -24,10 +25,12 @@ function appendSection(prompt: string, section: string): string {
  * acceptance prose is appended later and stays outside launch identity.
  */
 export function buildEffectiveSystemPrompt(input: EffectiveSystemPromptInput): string {
-	let prompt = input.agent.systemPrompt?.trim() ?? "";
+	let prompt = input.agent.name === DIRECT_TASK_AGENT ? input.agent.systemPrompt : input.agent.systemPrompt?.trim() ?? "";
 	if (input.resolvedSkills.length > 0) prompt = appendSection(prompt, buildSkillInjection(input.resolvedSkills));
-	const memoryInjection = buildAgentMemoryInjection(input.agent, input.cwd);
-	if (memoryInjection) prompt = appendSection(prompt, memoryInjection);
-	prompt = appendAgentRefinementOverlay(prompt, { cwd: input.cwd, agentName: input.agent.name });
+	if (input.agent.name !== DIRECT_TASK_AGENT) {
+		const memoryInjection = buildAgentMemoryInjection(input.agent, input.cwd);
+		if (memoryInjection) prompt = appendSection(prompt, memoryInjection);
+		prompt = appendAgentRefinementOverlay(prompt, { cwd: input.cwd, agentName: input.agent.name });
+	}
 	return injectOutputPathSystemPrompt(prompt, input.outputPath, input.agent);
 }

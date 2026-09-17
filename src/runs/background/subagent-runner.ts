@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { DIRECT_TASK_AGENT } from "../../agents/direct-task.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -1194,7 +1195,7 @@ export async function runSingleStepInner(
 		const run = await runChildSession(omitUndefinedProperties({
 			factory: ctx.childSessions,
 			launch,
-			prompt: `Task: ${recoveryTask}`,
+			prompt: step.agent === DIRECT_TASK_AGENT ? recoveryTask : `Task: ${recoveryTask}`,
 			childWatchdog,
 			childEventContext: { runId: ctx.id, stepIndex: ctx.flatIndex, agent: step.agent },
 			appendChildEvent: (event) => appendDiagnosticJsonl(eventsPath, JSON.stringify(event), typeof event.type === "string" ? event.type : undefined),

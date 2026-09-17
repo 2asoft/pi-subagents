@@ -8,13 +8,15 @@ Call `{ action: "guide", topic: "tool-reference" }` for this reference or `topic
 
 ## Execution examples
 
+Use `{ task, model?, tools?, instructions?, extensions? }` for a direct child. No profile file is required. Supply exact skill instructions and evidence. See [Direct task delegation](direct-delegation.md) for defaults, inheritance, providers, and retained contracts. Select `agent` explicitly when its profile behavior is wanted.
+
 Chaining is code-driven through `workflowScript`. Use `await runs.run(...)` for sequential steps and `await runs.all([{ key, agent, task }, ...])` for ordinary parallel fanout. `runs.all` resolves to an ordered array, not a key map, so use indexes, destructuring, or `.map(...)`, not `results.<key>`. Do not read `.output` from an unawaited `runs.run` launch. Stored `runs.run` promises are only for the advanced rolling fanout pattern under [Workflow steering](#workflow-steering), where every promise is later observed with direct `await`, `Promise.race`, or `Promise.all`. Legacy top-level `chain`, `tasks`, and `parallel` inputs are not supported. Helper functions must be plain functions or explicit Promise chains. Nested `async function` helpers, async arrows, and async methods are rejected so child-launch tracking stays portable across Node and Bun. For permission-sensitive host calls, use an extension-owned named resource such as `{ workflow: "run-ci", args: { command: "npm test" } }`; raw public `workflowScript`/`workflowScriptPath` inputs have unknown resource provenance and cannot call `runs.host`. A resolved resource may internally use `runs.host(key, { kind: "command", command, timeoutMs, output?, role?, provider? })` within its authority ceiling; there is no per-step `cwd`, and commands and relative output paths use the workflow `cwd`. Set `cwd` on the outer `subagent({...})` request instead, or put a trusted directory change in the command (for example, `cd /path/to/worktree && npm test`).
 
 Use `{ action: "validate", workflowScript }` to check statically decidable syntax and structure without launching children. It returns `{ ok, errors }` and fails the tool call when `ok` is false. Literal child `baseRef` values are checked against the runtime ref policy. Dynamic keys and values remain subject to runtime checks; static validation does not guess them.
 
 Use `workflowScriptPath` instead of `workflowScript` to load the same JavaScript statement body from a file. The two fields are mutually exclusive. Relative paths resolve against the request `cwd`, and absolute paths pass through. The host reads the file before validation, scheduling, or sandbox execution. The workflow sandbox still has no filesystem access. Missing, unreadable, and empty files fail as file input errors.
 
-Raw inline and file-backed scripts accept bounded plain-JSON `args`, including during `validate` and `schedule.create`. Omitted raw args become `{}`; supplied args are deeply frozen in the sandbox. Normalized args persist in run and schedule evidence for diagnosis and exact replay, so never include secrets. Args are data only and do not grant `runs.host` authority.
+Raw inline and file-backed scripts accept plain-JSON `args` up to 16 KiB, including during `validate` and `schedule.create`. Omitted raw args become `{}`; supplied args are deeply frozen in the sandbox. Normalized args persist in run and schedule evidence for diagnosis and exact replay, so never include secrets. Args are data only and do not grant `runs.host` authority.
 
 For permission-extension interoperability, use one of the package-owned named resources with bounded `args` instead of caller-supplied workflow text:
 
@@ -32,8 +34,11 @@ The host resolves the script and authority internally and records bounded proven
 ```
 
 ```js
-// One child; return the child promise explicitly
-{ workflowScript: `return runs.run("main", { agent: "scout", task: "Analyze the auth flow" })` }
+// One direct child
+{ task: "Inspect the auth flow and report findings with source references.", tools: ["read", "grep", "find", "ls"] }
+
+// One child in a workflow; return the child promise explicitly
+{ workflowScript: `return runs.run("main", { task: "Inspect the auth flow and report findings with source references." })` }
 
 // Sequential workflow
 { workflowScript: `
@@ -92,12 +97,16 @@ The complete plain-JSON inventory is validated before the first launch (maximum 
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `agent` | string | - | One direct child or agent-management target. Workflow child agents are set inside `runs.run` or `runs.all`. |
-| `task` | string | agent default | Direct child's task; requires `agent`, excludes `action` and workflow inputs. `agent` may also select a management target. |
+| `agent` | string | omitted | Optional named profile or management target. Omit for direct task execution. |
+| `task` | string | required for direct tasks | Exact child task. Excludes `action` and workflow inputs. |
+| `instructions` | string | empty | Direct task instructions appended to Pi's native system prompt. |
+| `tools` | string[] | native defaults | Direct task tool allowlist; `[]` disables tools. |
+| `extensions` | string[] | runtime defaults | Direct task extension paths resolved against cwd; `[]` disables ambient loading. |
+| `inheritProjectContext`, `inheritGlobalContext`, `inheritSkills` | boolean | true | Direct task inheritance controls. Cannot be changed on resume. |
 | `action` | string | - | Offline workflow `validate`, agent management (including `guide`, `children.list`, and `refine`/`refine.show`/`refine.rollback`), lane evidence (`lane.status`, `lane.recordMerge`, `lane.recordSupersession`), mission (`mission.create/list/show/update/resolve-decision/attach-run/close`), Inspect actions (`inspector.command/open/status/close`), Herdr project pane (`project.open/status/close`), status/control, plan-only `worktree.cleanup`, schedule, watchdog, or doctor action. |
 | `topic` | `overview \| workflows \| agents \| missions \| observability \| tool-reference \| configuration \| models \| watchdog \| extension-api` | `overview` | Packaged guide topic for `action: "guide"`. |
 | `config` | object/string | - | Agent config for management create/update. |
-| `context` | `fresh \| fork \| profile` | global or per-agent default, else `fresh` | Explicit `fresh` or `fork` overrides every workflow child. `profile` requires the selected agent's declared `defaultContext` and ignores config `defaultSubagentContext`; missing agent defaults fail. When omitted, [`defaultSubagentContext`](configuration.md#defaultsubagentcontext) wins over each agent's `defaultContext`; implicit fork falls back to fresh without a persisted parent session and leaf. Explicit fork is strict. Packaged `worker` defaults to `fresh`; packaged `oracle` and `advisor` default to `fork`. |
+| `context` | `fresh \| fork \| profile` | `fresh` for direct tasks; global or profile default otherwise | Explicit `fresh` or `fork` overrides every workflow child. `profile` requires the selected agent's declared `defaultContext` and ignores config `defaultSubagentContext`; missing agent defaults fail. When omitted, [`defaultSubagentContext`](configuration.md#defaultsubagentcontext) wins over each agent's `defaultContext`; implicit fork falls back to fresh without a persisted parent session and leaf. Explicit fork is strict. Packaged `worker` defaults to `fresh`; packaged `oracle` and `advisor` default to `fork`. |
 | `model` | string | agent default | Call `{action:"models"}` first and copy an exact `provider/id`; bare ids resolve only if unique, and agent names are not model ids. A suffix such as `provider/id:high` (`off/minimal/low/medium/high/xhigh/max`) overrides agent thinking. The `thinking` field is only for `watchdog.configure`, ignored on dispatch. |
 | `missionId` | string | - | Attach a workflow to an existing project mission instead of creating its default enclosing mission. |
 | `mission` | object/false | auto-create | Override the default enclosing mission with `{ title \| summary, objective?, goal?, budget?, labels? }`. Set exactly one non-empty `title` or `summary`; `objective` and `labels` are optional. `goal` may only be `true`, requires `budget.tokens`, and enables continuation notices. Pass `false` for an intentionally ephemeral workflow with no mission for it or its children and no `state` global. Explicit mission persistence failures are strict. |
@@ -129,7 +138,7 @@ The complete plain-JSON inventory is validated before the first launch (maximum 
 | `includeProgress` | boolean | false | Include full progress in result. |
 | `share` | boolean | false | Upload session export to GitHub Gist. |
 | `sessionDir` | string | derived | Override session log directory. |
-| `acceptance` | string/object/false | inferred | Configure evidence gates. See [Acceptance gates](#acceptance-gates). |
+| `acceptance` | string/object/false | none for direct tasks; inferred for named profiles | Configure evidence gates. See [Acceptance gates](#acceptance-gates). |
 | `gate` | string \| object | - | One host-run verification command, shorthand for `acceptance: { level: "verified", verify: [{ id: "gate", command }] }`. The object form `{ command, output?: "json", schema?, timeoutMs? }` adds a [typed gate](#typed-gates): with `output: "json"`, a passing command's stdout becomes the child's `structuredOutput`. Also valid on individual `runs.run`/`runs.all` items. Rejects `acceptance` except `false` (treated as omitted), rejects retained `resume`, and `output: "json"` rejects `outputSchema`. |
 
 ### Budget guidance for writers

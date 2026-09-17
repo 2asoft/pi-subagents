@@ -3,6 +3,7 @@
  */
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { DIRECT_TASK_AGENT } from "../../agents/direct-task.ts";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { discoverAgents, formatUnknownAgentError, unknownAgentDiagnosticContext, type AgentConfig } from "../../agents/agents.ts";
@@ -1407,7 +1408,7 @@ async function runSingleAttempt(
 				}
 				options.onChildSession?.({ steer: (text) => created.steer(text), followUp: (text) => created.followUp(text) });
 				messageBaseline = created.messages.length;
-				await created.prompt(`Task: ${task}`);
+				await created.prompt(agent.name === DIRECT_TASK_AGENT ? task : `Task: ${task}`);
 				settle(undefined);
 			} catch (error) {
 				settle(error ?? new Error("Child session failed."));

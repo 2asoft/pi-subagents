@@ -1105,6 +1105,7 @@ export interface WorkflowScriptChildResult {
 	recovery?: AcceptanceRecoveryMetadata;
 	outputPathMapping?: { requestedPath: string; savedPath: string };
 	externalAdapter?: import("../shared/types.ts").ExternalCliReceiptMetadata;
+	resumeWarning?: string;
 	resumability?: { state: "resumable" } | { state: "not-resumable"; reason: string };
 	continuation?: { runIds: string[] };
 	artifactPaths: string[];

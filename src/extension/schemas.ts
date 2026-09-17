@@ -3,6 +3,7 @@
  */
 
 import { Type } from "typebox";
+import { DirectTaskSchema } from "../agents/direct-task.ts";
 
 function keepTopLevelParameterDescriptions<T>(schema: T): T {
 	return pruneNestedDescriptions(schema, []) as T;
@@ -277,8 +278,9 @@ const ControlOverrides = Type.Object({
 });
 
 const SubagentParamProperties = {
-	agent: Type.Optional(Type.String({ description: "One-child agent or management target." })),
-	task: Type.Optional(Type.String({ description: "One-child task; requires agent." })),
+	agent: Type.Optional(Type.String({ description: "Optional named profile or management target." })),
+	task: Type.Optional(Type.String({ description: "Exact one-child task; agent is optional." })),
+	...DirectTaskSchema.properties,
 	extensionBindings: Type.Optional(Type.Unsafe({ type: "object", maxProperties: 16, additionalProperties: true, description: "Child-only bounded JSON; namespaces package.name/1." })),
 	// Management action (when present, tool operates in management mode)
 	action: Type.Optional(Type.String({ minLength: 1,

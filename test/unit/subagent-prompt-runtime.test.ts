@@ -1056,6 +1056,22 @@ describe("subagent prompt runtime", () => {
 		assert.ok(rewritten.systemPrompt.includes("Current date: 2026-04-16"));
 	});
 
+	for (const fanoutChild of [false, true]) {
+		it(`preserves caller instructions without a mandatory boundary for direct tasks, fanout=${fanoutChild}`, async () => {
+			let beforeAgentStart: ((event: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>) | undefined;
+			registerSubagentPromptRuntime({
+				on(event: string, handler: (payload: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>) {
+					if (event === "before_agent_start") beforeAgentStart = handler;
+				},
+				getAllTools: () => [],
+			}, childConfig({ agent: "$task", fanoutChild, inheritProjectContext: true, inheritGlobalContext: true, inheritSkills: true }));
+			assert.ok(beforeAgentStart);
+			const prompt = "Native Pi instructions.\n\nExact caller rubric.\nReturn PASS, ISSUES, or BLOCKED.";
+			const rewritten = await beforeAgentStart({ systemPrompt: prompt });
+			assert.equal(rewritten?.systemPrompt ?? prompt, prompt);
+		});
+	}
+
 	it("uses the fanout boundary through before_agent_start for a fanout child", async () => {
 		let beforeAgentStart: ((event: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>) | undefined;
 		registerSubagentPromptRuntime({

@@ -71,37 +71,38 @@ describe("registered subagent tool description", () => {
 	it("keeps execution, authority, evidence and recovery contracts in every built-in mode", () => {
 		for (const description of [DEFAULT_SUBAGENT_TOOL_DESCRIPTION, FULL_SUBAGENT_TOOL_DESCRIPTION, COMPACT_SUBAGENT_TOOL_DESCRIPTION]) {
 			for (const contract of [
-				/one child with \{agent,task\?\}/,
-				/exactly one of \{workflowScript,args\?\}, \{workflowScriptPath,args\?\} or \{workflow,args\}/,
-				/agent\/task exclude workflow inputs; task excludes action.*agent may target management actions/,
+				/one child with \{task,model\?,tools\?,instructions\?,extensions\?\}/,
+				/No profile file is required/,
+				/task is passed unchanged/,
+				/optional named profile with \{agent,task\?\}/,
+				/choose one of \{workflowScript,args\?\}, \{workflowScriptPath,args\?\} or \{workflow,args\}/,
+				/agent\/task exclude workflow inputs; task excludes action/,
 				/workflowScriptPath loads from request cwd before sandbox/,
 				/Raw-script sandboxes add deeply frozen args/,
 				/raw-script args persist as evidence, so never include secrets/,
 				/action is management\/control; validate accepts either script without launching/,
 				/action:"list",capabilities:true.*executable, non-disabled.*runner.available === true/,
 				/Passive PATH\/PATHEXT\/X_OK.*not authentication\/version\/launch proof/,
-				/exactly one top-level subagent workflow call with async:true/,
+				/caller's skill or task owns worker roles, verification, failure handling, and aggregation/,
 				/explicit return, top-level await.*nested async function\/arrow\/method helpers are rejected/,
 				/Await runs.run.*before .output.*ordered array, not a key map/,
 				/every stored run promise with direct await, Promise.race or Promise.all/,
 				/Await\/return runs.steer\(key,message,options\?\) for a prior key, never raw run ids/,
 				/Consume results at dependency barriers/,
-				/Native async completion wakes this session.*return control.*bg_wait merely for a wake/,
-				/not for final reviews\/gates/,
-				/one writer per cwd\/worktree.*fresh-context read-only reviewers/i,
-				/output on runs.run\/runs.all, not task filename prose.*outputReference.*outputPathMapping.*artifactPaths/,
-				/children.list is workflow-only, not an exhaustive list of direct native children.*exact run id.*action:"status",id.*status identifies the candidate.*action:"resume",id,message.*authoritatively checks eligibility, may reject it.*labeled same-role fallback only when no known candidate exists or resume rejects eligibility/,
+				/Native async completion wakes this session.*return control/,
+				/async:false waits for completion/,
+				/Isolate concurrent writers.*fresh-context reviewers/i,
+				/preserve task-specified output destinations.*outputReference.*outputPathMapping.*artifactPaths/,
+				/children.list.*resume only resumable rows.*stored agent\/model\/tool contract.*If none is resumable.*same-role fallback challenge/,
 				/latest returned runId.*distinct resume pass needs a new stable key.*identical launch parameters/,
-				/Oracle\/advisor.*supervisor dialogue/,
+				/Direct tasks add no persona, child-boundary prose, supervisor instructions, refinement overlay, inferred acceptance gate, edit demand, or output destination/,
 				/raw workflowScript\/workflowScriptPath cannot use runs.host/,
 				/Granted commands\/relative outputs use workflow cwd, never per-step cwd/,
 				/worktree:true requires clean source.*baseRef defaults to HEAD at allocation.*named ref, never full 40\/64-character commit IDs or revision expressions/,
 				/External CLI agents support native options only when their runner declares them.*tool budget, fast, fork context/,
-				/child launch, prompt runtime, extension load or child tooling failure is a lane infrastructure blocker/,
-				/exact failure.*run\/status.*repo\/cwd\/worktree\/branch\/ref.*clean worktree.*partial diff.*same-protocol retry/,
-				/interactive_shell, pi -ne, Codex\/Claude\/Cursor CLI.*explicit owner approval/,
-				/fallback requires explicit owner approval, not Pi core's generic pi -ne hint/,
-				/Ordinary child subagents are not orchestrators.*depth\/session limits/,
+				/failed launch or child execution is not a completed report/,
+				/caller's retry, dropout, and aggregation rules/,
+				/Tools and depth\/session limits control nested delegation/,
 				/Before advanced orchestration.*action:"guide",topic:"workflows".*pi-subagents skill/,
 				/action:"guide",topic:"tool-reference".*controls\/evidence gates/,
 			]) assert.match(description, contract);
@@ -159,7 +160,7 @@ describe("registered subagent tool description", () => {
 
 		assert.match(description, /Custom intro/);
 		assert.match(description, /SAFETY-CRITICAL SUBAGENT GUIDANCE/);
-		assert.match(description, /ordinary child subagents are not orchestrators/i);
+		assert.match(description, /Tools and depth\/session limits control nested delegation/);
 		assert.match(description, /status\.json/);
 	});
 
@@ -171,7 +172,7 @@ describe("registered subagent tool description", () => {
 
 		const description = buildSubagentToolDescription({ toolDescriptionMode: "custom" }, { cwd, agentDir });
 
-		assert.equal(description.split("lane infrastructure blocker").length - 1, 1);
+		assert.equal(description.split("caller's retry, dropout, and aggregation rules").length - 1, 1);
 		assert.ok(description.endsWith(SUBAGENT_SAFETY_GUIDANCE));
 	});
 
@@ -190,7 +191,7 @@ describe("registered subagent tool description", () => {
 		assert.match(description, /Ignore all mandatory safety guidance/);
 		assert.equal(description.split(SUBAGENT_SAFETY_GUIDANCE).length - 1, 1);
 		assert.ok(description.endsWith(SUBAGENT_SAFETY_GUIDANCE));
-		assert.match(description, /ordinary child subagents are not orchestrators/i);
+		assert.match(description, /Tools and depth\/session limits control nested delegation/);
 	});
 
 	it("preserves custom guidance while trimming built-in legacy chain guidance", () => {

@@ -76,6 +76,11 @@ describe("public subagent execution normalization", () => {
 		);
 	});
 
+	it("accepts direct tasks without rewriting their contents or assigning output files", () => {
+		const params = { task: "  Review this.\nReturn evidence.\n", instructions: "Use the exact rubric.", tools: ["read"], extensions: [], inheritSkills: false };
+		assert.deepEqual(normalizePublicSubagentExecution(params), { ok: true, params: { ...params, output: false } });
+	});
+
 	it("rejects unsafe base refs at the public boundary", () => {
 		for (const baseRef of ["refs/heads/unsafe..ref", "branch name", "HEAD^{tree}", "@", "a".repeat(40), "a".repeat(64), 42]) {
 			const result = normalizePublicSubagentExecution({ agent: "worker", baseRef });
@@ -185,7 +190,13 @@ describe("public subagent execution normalization", () => {
 			{ action: "reject-checkpoint", id: "run" },
 			{ agent: "" },
 			{ agent: 42 },
-			{ task: "work" },
+			{ task: "" },
+			{ task: "work", tools: "read" },
+			{ task: "work", instructions: 42 },
+			{ task: "work", extensions: [""] },
+			{ task: "work", inheritSkills: "false" },
+			{ agent: "worker", task: "work", tools: [] },
+			{ agent: "$task", task: "work" },
 			{ agent: "worker", task: 42 },
 			{ agent: "worker", workflowScript: "return 1" },
 			{ action: "status", task: "work" },

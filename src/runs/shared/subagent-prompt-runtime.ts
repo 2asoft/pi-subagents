@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { DIRECT_TASK_AGENT } from "../../agents/direct-task.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { BeforeProviderRequestEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -204,7 +205,7 @@ function stripChildBoundaryInstructions(prompt: string): string {
 
 export function rewriteSubagentPrompt(
 	prompt: string,
-	options: { inheritProjectContext: boolean; inheritGlobalContext: boolean; inheritSkills: boolean; fanoutChild?: boolean; structuredOutput?: boolean },
+	options: { inheritProjectContext: boolean; inheritGlobalContext: boolean; inheritSkills: boolean; fanoutChild?: boolean; structuredOutput?: boolean; boundaryInstructions?: string | false },
 ): string {
 	let rewritten = prompt;
 	if (!options.inheritProjectContext) {
@@ -218,9 +219,10 @@ export function rewriteSubagentPrompt(
 	}
 	rewritten = stripSubagentOrchestrationSkill(rewritten);
 	rewritten = stripChildBoundaryInstructions(rewritten);
-	const boundary = options.fanoutChild ? CHILD_FANOUT_BOUNDARY_INSTRUCTIONS : CHILD_SUBAGENT_BOUNDARY_INSTRUCTIONS;
-	const structured = options.structuredOutput ? `\n\n${STRUCTURED_OUTPUT_INSTRUCTIONS}` : "";
-	return `${boundary}${structured}\n\n${rewritten}`;
+	const boundary = options.boundaryInstructions === false ? "" : options.boundaryInstructions
+		?? (options.fanoutChild ? CHILD_FANOUT_BOUNDARY_INSTRUCTIONS : CHILD_SUBAGENT_BOUNDARY_INSTRUCTIONS);
+	const sections = [boundary, options.structuredOutput ? STRUCTURED_OUTPUT_INSTRUCTIONS : "", rewritten];
+	return sections.filter(section => section.length > 0).join("\n\n");
 }
 
 function isParentOnlySubagentMessage(message: unknown): boolean {
@@ -544,6 +546,7 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config?:
 				inheritSkills: inheritSkills ?? true,
 				fanoutChild,
 				structuredOutput: Boolean(config.structuredOutput),
+				boundaryInstructions: config.agent === DIRECT_TASK_AGENT ? false : undefined,
 			});
 		}
 		if (rewritten === event.systemPrompt) return;
