@@ -173,6 +173,12 @@ process.env[SUBAGENT_CHILD_ENV] = "1";
 process.env[SUBAGENT_RUNNER_PID_ENV] = String(process.pid);
 
 export interface SubagentRunConfig {
+	executionEnvironment?: string;
+	environmentSessionId?: string;
+	environmentSourceRunId?: string;
+	environmentHostPid?: number;
+	environmentHostPidNamespaceScope?: string;
+	leafFanoutBudget?: import("../../shared/types.ts").RunFanoutBudgetSnapshot;
 	id: string;
 	toolCallId?: string;
 	steps: RunnerStep[];
@@ -2059,8 +2065,8 @@ export async function runSubagent(
 		...(config.deadlineAt !== undefined ? { deadlineAt: config.deadlineAt } : {}),
 		...(config.toolBudget ? { toolBudget: initialToolBudgetState(config.toolBudget) } : {}),
 		...(config.usageBudget ? { usageBudget: usageBudgetState(config.usageBudget, undefined) } : {}),
-		pid: process.pid,
-		pidNamespaceScope: currentPidNamespaceScope(),
+		pid: config.environmentHostPid ?? process.pid,
+		pidNamespaceScope: config.environmentHostPid === undefined ? currentPidNamespaceScope() : config.environmentHostPidNamespaceScope,
 		cwd,
 		currentStep: 0,
 		chainStepCount: steps.length,
@@ -2069,7 +2075,7 @@ export async function runSubagent(
 		...(config.launchContractDigest ? { launchContractDigest: config.launchContractDigest } : {}),
 		...(config.launchResolvedExtensions ? { launchResolvedExtensions: config.launchResolvedExtensions } : {}),
 		...(config.capabilityCeiling ? { capabilityCeiling: config.capabilityCeiling } : {}),
-		...(config.runFanoutBudget ? { runFanoutBudget: getRunFanoutBudgetSnapshot(config.runFanoutBudget) } : {}),
+		...(config.leafFanoutBudget ? { runFanoutBudget: config.leafFanoutBudget } : config.runFanoutBudget ? { runFanoutBudget: getRunFanoutBudgetSnapshot(config.runFanoutBudget) } : {}),
 		...(config.revivalLease ? { revivedFrom: config.revivalLease.sourceRunId } : {}),
 		...(config.parentWorkflowRunId ? { parentWorkflowRunId: config.parentWorkflowRunId } : {}),
 		...(config.workflowKey ? { workflowKey: config.workflowKey } : {}),

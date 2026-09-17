@@ -1,6 +1,7 @@
 export type ResolvedRunnerConfig = import("../../shared/types.ts").AgentRunnerConfig;
 
 export interface RunnerSubagentStep {
+	environmentContext?: import("../../shared/execution-environments.ts").AdmittedEnvironmentContext;
 	/** Session id of the direct parent session for permission-system ask forwarding. */
 	parentSessionId?: string;
 	/** Parent session file, recorded as the new child session's `parentSession` header. */
