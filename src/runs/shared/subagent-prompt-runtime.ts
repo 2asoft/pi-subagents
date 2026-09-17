@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { DIRECT_TASK_AGENT } from "../../agents/direct-task.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { declarationsEqual, getCurrentSystemMessage, getCurrentTools, type AnthropicMessagesCompat, type SystemMessage, type TranscriptMessages } from "@earendil-works/pi-ai";
@@ -252,7 +253,7 @@ function rewritesChildPrompt(config: ChildRuntimeConfig): boolean {
 
 /** Installed after every other extension: a returned prompt freezes out sections added after it. */
 export function registerSubagentPromptBoundary(pi: ExtensionAPI, config: ChildRuntimeConfig): void {
-	if (!rewritesChildPrompt(config)) return;
+	if (config.agent === DIRECT_TASK_AGENT || !rewritesChildPrompt(config)) return;
 	// A returned prompt replaces the whole system prompt of every request. A fork must send its
 	// parent's prompt unchanged to reuse its prompt cache, so its boundary goes in its task
 	// message instead (see projectForkRequest).

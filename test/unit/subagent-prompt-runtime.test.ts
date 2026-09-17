@@ -1171,6 +1171,22 @@ describe("subagent prompt runtime", () => {
 		assert.equal(options.appendSystemPrompt, "Extra.");
 	});
 
+	for (const fanoutChild of [false, true]) {
+		it(`preserves caller instructions without a boundary for direct tasks, fanout=${fanoutChild}`, () => {
+			// Arrange
+			const handlers: Array<(event: { systemPrompt: string }) => { systemPrompt: string } | undefined> = [];
+			const api = { on: (_event: string, handler: (typeof handlers)[number]) => handlers.push(handler) } as never;
+			const prompt = "Native Pi instructions.\n\nExact caller rubric.";
+			registerSubagentPromptBoundary(api, childConfig({ agent: "$task", fanoutChild, inheritProjectContext: true, inheritGlobalContext: true, inheritSkills: true }));
+
+			// Act
+			const rewritten = handlers.reduce((text, handler) => handler({ systemPrompt: text })?.systemPrompt ?? text, prompt);
+
+			// Assert
+			assert.equal(rewritten, prompt);
+		});
+	}
+
 	it("appends the child boundary once to the complete prompt, after another extension's own prompt", () => {
 		const handlers: Array<(event: { systemPrompt: string }) => { systemPrompt: string } | undefined> = [];
 		const api = { on: (_event: string, handler: (typeof handlers)[number]) => handlers.push(handler) } as never;

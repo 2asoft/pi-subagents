@@ -8,6 +8,8 @@ Call `{ action: "guide", options: { topic: "tool-reference" } }` for this refere
 
 ## Execution examples
 
+Use `{ task, model?, options: { tools?, instructions?, extensions? } }` for a direct child. No profile file is required. Supply exact skill instructions and evidence. See [Direct task delegation](direct-delegation.md) for defaults, inheritance, providers, and retained contracts. Select `agent` explicitly when its profile behavior is wanted.
+
 Chaining is code-driven through a workflow script. Write the script as one ```` ```js workflow ```` fenced block in the reply, then call `subagent({ workflow: true, ... })` in the same reply. A `workflow` string containing `/` is a script file, and any other string is a named resource. `workflowScript` and `workflowScriptPath` were removed; use these forms instead.
 
 Use `await runs.run(...)` for sequential steps and `await runs.all([{ key, agent, task }, ...])` for ordinary parallel fanout. `runs.all` resolves to an ordered array, not a key map, so use indexes, destructuring, or `.map(...)`, not `results.<key>`. Do not read `.output` from an unawaited `runs.run` launch. Stored `runs.run` promises are only for the advanced rolling fanout pattern under [Workflow steering](#workflow-steering), where every promise is later observed with direct `await`, `Promise.race`, or `Promise.all`. Legacy top-level `chain`, `tasks`, and `parallel` inputs are not supported, except that `disabledFeatures: ["workflow-scripts"]` replaces workflow scripts with top-level `chain` and `tasks` (see [configuration](configuration.md#chain-and-tasks-without-workflow-scripts)). Helper functions must be plain functions or explicit Promise chains. Nested `async function` helpers, async arrows, and async methods are rejected so child-launch tracking stays portable across Node and Bun. For permission-sensitive host calls, use an extension-owned named resource such as `{ workflow: "run-ci", args: { command: "npm test" } }`; raw scripts (`workflow: true` or a script path) have unknown resource provenance and cannot call `runs.host`. A resolved resource may internally use `runs.host(key, { kind: "command", command, timeoutMs, output?, role?, provider? })` within its authority ceiling; there is no per-step `cwd`, and commands and relative output paths use the workflow `cwd`. Set `cwd` on the outer `subagent({...})` request instead, or put a trusted directory change in the command (for example, `cd /path/to/worktree && npm test`).
@@ -74,8 +76,12 @@ The `subagent` tool schema lists `agent`, `task`, `workflow`, `args`, `async`, `
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `options` | object | - | Management and control fields; the rows named `options.<name>` below go here. Unknown keys are rejected with the closest valid option. The same fields are also accepted at the top level. |
-| `agent` | string | - | One direct child or agent-management target. Workflow child agents are set inside `runs.run` or `runs.all`. |
-| `task` | string | agent default | Direct child's task; requires `agent`, excludes `action` and workflow inputs. `agent` may also select a management target. |
+| `agent` | string | omitted | Optional named profile or agent-management target. Omit for direct task execution. |
+| `task` | string | required for direct tasks | Exact child task. Excludes `action` and workflow inputs. |
+| `options.instructions` | string | empty | Direct task instructions appended to Pi\'s native system prompt. |
+| `options.tools` | string[] | native defaults | Direct task tool allowlist; `[]` disables tools. |
+| `options.extensions` | string[] | runtime defaults | Direct task extension paths resolved against cwd; `[]` disables ambient loading. |
+| `options.inheritProjectContext`, `options.inheritGlobalContext`, `options.inheritSkills` | boolean | true | Direct task inheritance controls. Retained on resume. |
 | `action` | string | - | Offline workflow `validate`, agent management (including `guide`, `children.list`, and `refine`/`refine.show`/`refine.rollback`), lane evidence (`lane.status`, `lane.recordMerge`, `lane.recordSupersession`), mission (`mission.create/list/show/update/resolve-decision/attach-run/close`), Inspect actions (`inspector.command/open/status/close`), Herdr project pane (`project.open/status/close`), status/control, reviewed `worktree.cleanup`, schedule, watchdog, or doctor action. |
 | `options.topic` | `overview \| workflows \| agents \| missions \| observability \| tool-reference \| configuration \| models \| watchdog \| extension-api \| council`, or `<topic>/<section>` | `overview` | Packaged guide topic for `action: "guide"`. A docs topic returns its table of contents; `<topic>/<section>` returns one section. |
 | `options.config` | object/string | - | Agent config for management create/update. |
@@ -119,7 +125,7 @@ The `subagent` tool schema lists `agent`, `task`, `workflow`, `args`, `async`, `
 | `options.includeProgress` | boolean | false | Include full progress in result. |
 | `options.share` | boolean | false | Upload session export to GitHub Gist. |
 | `options.sessionDir` | string | derived | Override session log directory. |
-| `options.acceptance` | string/object/false | inferred | Configure evidence gates. See [Acceptance gates](#acceptance-gates). |
+| `options.acceptance` | string/object/false | none for direct tasks; inferred for named profiles | Configure evidence gates. See [Acceptance gates](#acceptance-gates). |
 | `options.gate` | string \| object | - | One host-run verification command, shorthand for `acceptance: { level: "verified", verify: [{ id: "gate", command }] }`. The object form `{ command, output?: "json", schema?, timeoutMs? }` adds a [typed gate](#typed-gates): with `output: "json"`, a passing command's stdout becomes the child's `structuredOutput`. Also valid on individual `runs.run`/`runs.all` items. Rejects `acceptance` except `false` (treated as omitted), rejects retained `resume`, and `output: "json"` rejects `outputSchema`. |
 
 ### Budget guidance for writers
