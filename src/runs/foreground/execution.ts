@@ -3,6 +3,7 @@
  */
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { DIRECT_TASK_AGENT } from "../../agents/direct-task.ts";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { discoverAgents, formatUnknownAgentError, unknownAgentDiagnosticContext, type AgentConfig } from "../../agents/agents.ts";
@@ -1470,7 +1471,7 @@ async function runSingleAttempt(
 				});
 				messageBaseline = created.messages.length;
 				// A runtime replacement can stop a child that detached while it was still being created.
-				if (!hostStopReason) await created.prompt(`Task: ${task}`);
+				if (!hostStopReason) await created.prompt(agent.name === DIRECT_TASK_AGENT ? task : `Task: ${task}`);
 				// A structured child that finished normally without calling structured_output gets one more turn (#2997).
 				if (options.structuredOutput
 					&& !structuredOutputToolInvoked

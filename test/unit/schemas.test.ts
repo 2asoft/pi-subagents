@@ -253,7 +253,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		const properties = SubagentParams?.properties as Record<string, JsonSchemaNode> | undefined;
 		assert.equal(properties?.task?.type, "string");
 		assert.match(String(properties?.task?.description ?? ""), /one-child/i);
-		assert.match(String((properties?.agent as JsonSchemaNode | undefined)?.description ?? ""), /one-child/i);
+		assert.match(String((properties?.agent as JsonSchemaNode | undefined)?.description ?? ""), /optional named profile/i);
 		assert.equal(properties?.clarify, undefined, "clarify should not be model-facing");
 		assert.ok(properties?.output, "output remains a workflow child default");
 		assert.match(String(properties?.output?.description ?? ""), /relative workflow paths use managed artifact routing/i);

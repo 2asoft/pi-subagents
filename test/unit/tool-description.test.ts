@@ -68,10 +68,10 @@ describe("registered subagent tool description", () => {
 	it("keeps call shapes, discovery and safety rules in every built-in mode", () => {
 		for (const description of [DEFAULT_SUBAGENT_TOOL_DESCRIPTION, FULL_SUBAGENT_TOOL_DESCRIPTION, COMPACT_SUBAGENT_TOOL_DESCRIPTION]) {
 			for (const contract of [
-				/One child: \{agent,task\}/,
+				/One child: \{task,options:\{tools\?,instructions\?,extensions\?\}\} or \{agent,task\}/,
 				/exactly one top-level subagent workflow call with async:true; write one ```js workflow block in this reply, then call subagent\(\{workflow:true\}\)/,
 				/\{action,id\?,options:\{\.\.\.\}\}; fields not in this schema go in options/,
-				/Launch agents by name and pass models as exact provider\/id; an unknown agent or model returns the valid choices/,
+				/Named profiles are optional\. Pass models as exact provider\/id; unknown agents or models return valid choices/,
 				/Native async completion wakes this session: return control; do not sleep, poll or call bg_wait for it/,
 				/One writer per cwd\/worktree/,
 				/After a launch or runtime failure, stop and report it; never silently switch to interactive_shell, pi -ne or another CLI/,
