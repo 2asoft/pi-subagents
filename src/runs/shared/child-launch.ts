@@ -6,6 +6,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { DIRECT_TASK_AGENT } from "../../agents/direct-task.ts";
 import type { ChildWatchdogConfig, ChildWatchdogStatusEvent } from "../../watchdog/child-status.ts";
 import type { ThinkingLevel } from "../../shared/model-info.ts";
 import { intersectThinkingCeilings } from "../../shared/thinking-ceiling.ts";
@@ -228,8 +229,12 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 	const permissions = input.permissionRules && Object.keys(input.permissionRules).length > 0
 		? { rules: input.permissionRules, ...(input.permissionAuditPath ? { auditPath: input.permissionAuditPath } : {}) }
 		: undefined;
+	const directSupervisor = input.childAgentName === DIRECT_TASK_AGENT && input.tools?.includes("contact_supervisor");
+	if (directSupervisor && (!input.parentSessionId || !input.runId || !toolPlan.effectiveToolAllowlist.includes("contact_supervisor"))) {
+		throw new Error("Requested contact_supervisor requires parent/run routing and permission in the effective tool allowlist.");
+	}
 	let supervisorDir: string | undefined;
-	if (input.orchestratorIntercomTarget && input.parentSessionId && input.runId) {
+	if ((directSupervisor || input.orchestratorIntercomTarget) && input.parentSessionId && input.runId) {
 		supervisorDir = supervisorChannelDir(input.runId, input.childAgentName, input.childIndex);
 		fs.mkdirSync(path.join(supervisorDir, "requests"), { recursive: true });
 		fs.mkdirSync(path.join(supervisorDir, "replies"), { recursive: true });

@@ -194,6 +194,56 @@ function captureSupervisorPolling(t: TestContext, allowedDirs: Set<string>) {
 }
 
 describe("supervisor ask registration", () => {
+	for (const host of ["parent", "runner"] as const) {
+		it(`routes an explicitly requested direct supervisor without a bridge (${host})`, async () => {
+			const sessionId = randomUUID();
+			const runId = randomUUID();
+			const launch = buildInProcessChildLaunch({
+				host, cwd: os.tmpdir(), childAgentName: "$task", childIndex: 0,
+				parentSessionId: sessionId, runId, sessionEnabled: false,
+				tools: ["contact_supervisor"], extensions: [],
+				inheritProjectContext: false, inheritGlobalContext: false, inheritSkills: false,
+			});
+			assert.ok(launch.session.runtime.supervisorChannelDir);
+			createdChannels.push(launch.session.runtime.supervisorChannelDir);
+			assert.equal(launch.session.runtime.orchestratorTarget, undefined);
+			assert.deepEqual(launch.session.runtime.requiredTools, ["contact_supervisor"]);
+			const abort = new AbortController();
+			const child = hookRuntime(launch.session, "linux", abort.signal);
+			const tools = new Map<string, SupervisorTool>();
+			const channel = createNativeSupervisorChannel(makePi({ tools }) as never, makeState(sessionId, makeCtx(sessionId)), { platform: "darwin" });
+			try {
+				channel.start();
+				await child.emit("session_start");
+				await child.emit("agent_start");
+				assert.deepEqual(child.active(), ["contact_supervisor"]);
+				const answer = child.call("contact_supervisor", { action: "ask", reason: "need_decision", message: "Choose a branch." });
+				void answer.catch(() => {});
+				await waitForCondition(() => fs.readdirSync(path.join(launch.session.runtime.supervisorChannelDir!, "requests")).length > 0, "direct supervisor request");
+				await tools.get(NATIVE_SUPERVISOR_TOOL_NAME)!.execute("pending", { action: "pending" });
+				const request = [...channel.pending.values()][0]!;
+				assert.equal(request.runId, runId);
+				assert.equal(request.agent, "$task");
+				await tools.get(NATIVE_SUPERVISOR_TOOL_NAME)!.execute("reply", { action: "reply", replyTo: request.id, message: "Use branch A." });
+				assert.match(text(await answer), /Use branch A\./);
+			} finally {
+				abort.abort();
+				await child.emit("session_shutdown");
+				channel.dispose();
+			}
+		});
+	}
+
+	it("rejects direct supervisor requests without routing or with tool restrictions", () => {
+		const base = { host: "parent" as const, cwd: os.tmpdir(), childAgentName: "$task", childIndex: 0, sessionEnabled: false, tools: ["contact_supervisor"], runId: randomUUID(), parentSessionId: randomUUID() };
+		for (const restriction of [
+			{ parentSessionId: undefined }, { runId: undefined },
+			{ excludeTools: ["contact_supervisor"] },
+			{ capabilityCeiling: { version: 1 as const, allowedTools: [], sources: ["test"] } },
+		]) assert.throws(() => buildInProcessChildLaunch({ ...base, ...restriction }), /contact_supervisor/);
+		const unrequested = buildInProcessChildLaunch({ ...base, tools: [] });
+		assert.equal(unrequested.session.runtime.supervisorChannelDir, undefined);
+	});
 	for (const platform of ["darwin", "win32", "linux"] as const) {
 		it(`drains foreground and workflow progress completed between ticks exactly once (${platform})`, async (t) => {
 			const root = fs.mkdtempSync(path.join(os.tmpdir(), "nested-final-progress-"));

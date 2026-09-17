@@ -4,6 +4,7 @@
  * foreground path and the async runner build their session launch from this.
  */
 import { createHash } from "node:crypto";
+import { DIRECT_TASK_AGENT } from "../../agents/direct-task.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -388,15 +389,17 @@ export function resolvePiLaunchToolPlan(
 	// the native supervisor channel (or pi-intercom). The pre-0.50 bridge always
 	// appended intercom alongside contact_supervisor, so that exact pairing is
 	// legacy plumbing, not a user demand for an external intercom provider;
-	// a lone intercom entry stays strictly required (#1207).
-	const legacySupervisorPairing = effectiveDeclaredBuiltinTools.includes("contact_supervisor");
+	// a lone intercom entry stays strictly required (#1207). Direct tasks
+	// explicitly request these capabilities and do not inherit that exception.
+	const directTask = input.agentName === DIRECT_TASK_AGENT;
+	const legacySupervisorPairing = !directTask && effectiveDeclaredBuiltinTools.includes("contact_supervisor");
 	const requiredChildTools = explicitToolAllowlist
 		? [
 				...new Set([
 					...(input.tools !== undefined ? effectiveDeclaredBuiltinTools : []),
 					...(input.mcpDirectTools?.length ? effectiveMcpTools : []),
 					...internalTools,
-				].filter((tool) => tool !== "contact_supervisor" && (!legacySupervisorPairing || tool !== "intercom"))),
+				].filter((tool) => (directTask || tool !== "contact_supervisor") && (!legacySupervisorPairing || tool !== "intercom"))),
 			]
 		: [];
 	const permSystemExt = capabilityCeiling?.denyExtensions

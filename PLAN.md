@@ -59,4 +59,29 @@ Sol reviewed the code and these boundaries. The final workflow warning repair fo
 
 ## Open questions
 
-No implementation blocker remains. This document retains the verification summary; temporary probes are removed after verification. Installation, configuration application, and publication require a later operator request.
+No implementation blocker remains for the original direct-delegation increment. This document retains the verification summary; temporary probes are removed after verification. Installation, configuration application, and publication require a later operator request.
+
+## Explicit supervisor increment
+
+Scope agreed with NT96663: provision explicitly requested direct `contact_supervisor` without bridge prose, enforce availability before model work, preserve named profiles and tool restrictions. Environment implementation, retention/deadlines, cache policy and project acceptance remain separate increments.
+
+1. Reproduce missing direct routing and ignored restrictions. Done: both host variants and missing-routing/restriction tests failed before the correction.
+2. Provision routing from the explicit direct tool request; require direct tools after native registration. Done. Named-profile exceptions remain unchanged.
+3. Verify request/reply and retained tool contract on resume. Done: native file protocol tests and foreground-to-background resume integration pass.
+4. Verify unavailable-tool failure releases child extensions before model work. Done: cleanup assertion failed before moving admission to the normal bounded shutdown path. Installed Pi SDK smoke verifies real registration, rejection and both shutdown events without model prompts.
+5. Document proposed environment API and exact resources. Done in `docs/execution-environment-proposal.md`; no environment implementation. Review identified the leaf's shared budget read and omitted host terminal proof file; both are now explicit.
+6. Complete final repository checks and review follow-up, then commit locally. Done: typecheck and package build pass; 3,303 unit and 1,062 integration tests pass, with 20 skipped. Diff checks pass. Review follow-up `bc310a96-21e2-4f4a-bbcd-1c588b6a7018` returned "No findings." Commit remains local; active sessions require reload to use the correction.
+
+The inherited `PI_OFFLINE=1` causes two Windows global-discovery unit failures on both unchanged HEAD and the working tree. `env -u PI_OFFLINE npm run test:unit` passes. No global environment setting was changed.
+
+Installed SDK smoke command, run from an isolated temporary directory with its own agent state:
+
+```sh
+repo=/absolute/path/to/pi-subagents
+probe=$(mktemp -d)
+mkdir -p "$probe/agent"
+(cd "$probe" && PI_CODING_AGENT_DIR="$probe/agent" PI_SUBAGENTS_TEMP_ROOT="$probe/runtime" \
+  pi --mode rpc --no-session --no-extensions --no-skills -e "$repo/test/smoke/direct-supervisor.ts")
+```
+
+Standalone Node imports of this Pi installation failed on missing external dependencies; the smoke instead uses Pi's actual extension loader. It does not submit model prompts or modify active configuration. Native registration and cleanup passed through that loader.

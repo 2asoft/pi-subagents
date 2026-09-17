@@ -170,7 +170,7 @@ describe("direct skill delegation", () => {
 		const result = await executor.executePublic("direct-resume", {
 			async: false, mission: false,
 			workflowScript: `const first = await runs.run("first", {
-				task: "Review the initial evidence.", instructions: "EXACT_REVIEW_CONTRACT", tools: ["read"], extensions: [],
+				task: "Review the initial evidence.", instructions: "EXACT_REVIEW_CONTRACT", tools: ["read", "contact_supervisor"], extensions: [],
 				inheritProjectContext: false, inheritGlobalContext: false, inheritSkills: false
 			});
 			const second = await runs.run("followup", { resume: first.runId, task: "  Review the additional evidence.  " });
@@ -180,6 +180,6 @@ describe("direct skill delegation", () => {
 		const calls = readAllCallArgs(true);
 		assert.equal(calls.length, 2, JSON.stringify(result));
 		assert.deepEqual(new Set(calls.map(args => args.at(-1))), new Set(["Review the initial evidence.", "  Review the additional evidence.  "]));
-		for (const args of calls) assert.equal(args[args.indexOf("--tools") + 1], "read");
+		for (const args of calls) assert.equal(args[args.indexOf("--tools") + 1], "read,contact_supervisor");
 	});
 });

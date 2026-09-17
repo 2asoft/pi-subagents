@@ -12,11 +12,13 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { DIRECT_TASK_AGENT } from "../../agents/direct-task.ts";
 import { pinChildCacheRetention } from "../../shared/child-cache-retention.ts";
 import { getAgentDir, PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../../shared/utils.ts";
 import { resolvePackageSubpath } from "../background/runner-aliases.ts";
+import { evaluateChildToolDiagnostic, type ChildRuntimeConfig } from "./child-runtime-config.ts";
 import { PI_CODING_AGENT_PACKAGE, resolveInstalledPiPackageRoot, resolvePiPackageRoot } from "./pi-spawn.ts";
-import type { ChildRuntimeConfig } from "./child-runtime-config.ts";
+import { formatChildToolDiagnostic } from "./tool-availability.ts";
 import type { RequiredChildExtensionSnapshot } from "../../shared/required-child-extensions.ts";
 import type { HerdrMachineReference, HerdrRemoteGitStatus } from "../../shared/types.ts";
 
@@ -429,6 +431,18 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 				get modelId() { return session.model ? `${session.model.provider}/${session.model.id}` : undefined; },
 			};
 			live.add(child);
+			// Pi reports hook exceptions without aborting the model turn. Enforce
+			// direct requirements after session_start registers native tools, and
+			// use normal shutdown to release extensions if admission fails.
+			if (launch.runtime.agent === DIRECT_TASK_AGENT && launch.runtime.requiredTools?.length) {
+				try {
+					const diagnostic = evaluateChildToolDiagnostic(launch.runtime, session.getActiveToolNames());
+					if (diagnostic) throw new Error(formatChildToolDiagnostic(diagnostic));
+				} catch (error) {
+					await child.dispose();
+					throw error;
+				}
+			}
 			return child;
 		},
 		async dispose() {

@@ -69,6 +69,21 @@ A tool allowlist does not load its extension. Supply the actual extension paths 
 
 Foreground tasks use SDK sessions in the parent process. Background tasks use the detached runner. Both routes preserve direct task instructions and tool selection.
 
+### Explicit supervisor access
+
+Request `contact_supervisor` in a direct child's `tools` to provision the native upward channel, including with `extensions: []`. No intercom bridge or supervisor prose is added. Provider extensions remain a separate requirement. Example public call:
+
+```js
+{ task: "Review the evidence; ask the parent if a decision is needed.",
+  tools: ["read", "contact_supervisor"], async: true }
+```
+
+The child uses `contact_supervisor` with `action: "ask"`, `reason: "need_decision"` and `message`. The parent reads `subagent_supervisor({ action: "pending" })` and replies with `{ action: "reply", replyTo: requestId, message }`. Ordinary steering does not answer a blocking question.
+
+Missing routing, tool restrictions that remove the requested supervisor, or unavailable required direct tools fail before model execution. Availability is checked after native tool registration. Named profiles retain their existing bridge/tool behavior. Resume retains the explicit tool request and provisions routing for the resumed run.
+
+Execution environments and unlimited waits are still proposals; see [the API and resource inventory](execution-environment-proposal.md).
+
 ## Controls and resume
 
 Use the existing `status`, `steer`, `interrupt`, `stop`, and `resume` actions with the returned run ID. `interrupt` preserves resumable work; `stop` cancels it. Inspect terminal state and returned evidence rather than treating a control receipt as proof of compliance.

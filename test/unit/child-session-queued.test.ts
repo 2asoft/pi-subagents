@@ -31,6 +31,37 @@ describe("childSessionHasQueuedMessages", () => {
 });
 
 describe("default factory queued-message probe", () => {
+	it("rejects an unavailable direct supervisor after binding and before model work", async () => {
+		let bound = false;
+		let disposed = false;
+		let shutDown = false;
+		let prompted = false;
+		const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => ({
+			ModelRuntime: { create: async () => ({}) },
+			SettingsManager: { create: () => ({}) },
+			DefaultResourceLoader: class { async reload() {} },
+			SessionManager: { inMemory: () => ({}) },
+			resolveCliModel: () => ({}),
+			createAgentSession: async () => ({ session: {
+				bindExtensions: async () => { bound = true; },
+				getActiveToolNames: () => { assert.equal(bound, true); return []; },
+				dispose() { disposed = true; },
+				extensionRunner: { hasHandlers: () => true, emit: async (event: { type: string }) => { assert.equal(event.type, "session_shutdown"); shutDown = true; } },
+				prompt: async () => { prompted = true; },
+			} }),
+		} as unknown as PiCodingAgentModule) });
+		await assert.rejects(async () => {
+			const child = await factory.create({
+				cwd: process.cwd(), storage: { kind: "memory" }, extensionPaths: [], ambientExtensions: false,
+				hooks: [], noSkills: true, noContextFiles: true,
+				runtime: { agent: "$task", requiredTools: ["contact_supervisor"], fanoutChild: false, depth: 1, waitTool: { enabled: false }, fast: false },
+			});
+			await child.prompt("Must not reach the model.");
+		}, /contact_supervisor/);
+		assert.equal(prompted, false);
+		assert.equal(disposed, true);
+		assert.equal(shutDown, true);
+	});
 	it("rejects a required loader failure before requested-model resolution", async () => {
 		let modelResolved = false;
 		const requiredPath = "/tmp/required-provider.mjs";
