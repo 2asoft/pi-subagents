@@ -132,6 +132,28 @@ export function resolveExecutionEnvironment(sessionId: string, name: string, wri
 	return registered;
 }
 
+/** Publish the registration API for project extensions without package resolution. */
+export function publishExecutionEnvironmentAPI(): () => void {
+	const key = Symbol.for("pi-subagents.execution-environment-api.v1");
+	const publishersKey = Symbol.for("pi-subagents.execution-environment-api-publishers.v1");
+	const existing: unknown = Reflect.get(globalThis, publishersKey);
+	if (existing !== undefined && !(existing instanceof Set)) throw new Error("Invalid execution environment API publishers.");
+	const api = Object.freeze({ version: 1 as const, register: registerExecutionEnvironment });
+	const publishers: Set<typeof api> = existing ?? new Set();
+	Object.defineProperty(globalThis, publishersKey, { value: publishers, configurable: true });
+	publishers.add(api);
+	Object.defineProperty(globalThis, key, { value: api, configurable: true });
+	return () => {
+		if (!publishers.delete(api)) return;
+		if (Reflect.get(globalThis, key) === api) {
+			const remaining = [...publishers].at(-1);
+			if (remaining) Object.defineProperty(globalThis, key, { value: remaining, configurable: true });
+			else Reflect.deleteProperty(globalThis, key);
+		}
+		if (publishers.size === 0) Reflect.deleteProperty(globalThis, publishersKey);
+	};
+}
+
 export function buildEnvironmentPolicy(definition: RegisteredEnvironment, input: Omit<EnvironmentInput, "version" | "name" | "definitionDigest" | "childIndex">): BubblewrapPolicy {
 	const frozen: EnvironmentInput = Object.freeze({
 		...input, version: 1, name: definition.identity.name, definitionDigest: definition.identity.digest, childIndex: 0,

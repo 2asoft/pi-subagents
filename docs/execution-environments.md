@@ -29,24 +29,49 @@ Foreground execution, forked context, named profiles, nested delegation, remote 
 
 ## Trusted registration
 
-The parent extension imports its policy module and registers it for the current session:
+A project extension without a package dependency looks up the public registration API during `session_start`. Enable pi-subagents in Pi's package settings or load its entrypoint explicitly. No project package-manager setup or installed-package path is needed in the consumer:
 
 ```ts
-import { registerExecutionEnvironment } from "pi-subagents/execution-environments";
 import { buildPolicy } from "/trusted/project/environment-policy.ts";
 
+let disposeRegistration: (() => void) | undefined;
+pi.on("session_shutdown", () => {
+  disposeRegistration?.();
+  disposeRegistration = undefined;
+});
 pi.on("session_start", (_event, ctx) => {
-  registerExecutionEnvironment({
+  disposeRegistration?.();
+  disposeRegistration = undefined;
+  const api: unknown = Reflect.get(
+    globalThis, Symbol.for("pi-subagents.execution-environment-api.v1")
+  );
+  if (!api || typeof api !== "object"
+      || !("version" in api) || api.version !== 1
+      || !("register" in api) || typeof api.register !== "function") {
+    throw new Error("Enable pi-subagents before registering an execution environment.");
+  }
+  const registration: unknown = api.register({
     sessionId: ctx.sessionManager.getSessionId(),
     name: "project",
     modulePath: "/trusted/project/environment-policy.ts",
     policyFiles: ["/trusted/project/environment-policy.json"],
     buildPolicy,
   });
+  if (!registration || typeof registration !== "object"
+      || !("dispose" in registration)
+      || typeof registration.dispose !== "function") {
+    throw new Error("Invalid execution environment registration handle.");
+  }
+  const release = registration.dispose;
+  disposeRegistration = () => { release.call(registration); };
 });
 ```
 
-Registration returns `{ dispose(): void }`. Names are unique within a parent session. Separate extension-loader instances share the registry. A restarted parent must register the definition again.
+The frozen version-1 service exposes `register`, the same registrar as the package API. Each parent runtime publishes it during extension initialization. It remains available until the last publisher shuts down, including across loader instances. Lookup during `session_start` works in either extension load order; repeat the lookup after reload. Pi can log a session-start exception without a nonzero CLI exit, so automation must check successful registration rather than exit status alone.
+
+The bare import `pi-subagents/execution-environments` remains available where normal package resolution can find pi-subagents. Enabling a Pi package does not make that import resolvable from an unrelated project directory.
+
+Registration returns `{ dispose(): void }`. Names are unique within a parent session. Separate extension-loader instances share the registry. A restarted parent must register the definition again. Dispose the consumer's registration on shutdown, as above: withdrawing the service does not remove registrations. This prevents duplicate-name errors and stale callbacks when reloading the same session.
 
 Define `buildPolicy` in the declared self-contained module. Node builtins are permitted. Declare additional policy inputs in `policyFiles`. Registration pins canonical targets and SHA256 bytes; resolution rechecks the original supplied paths, so symlink retargeting also counts as drift. Retained runs cannot repin a changed definition.
 
@@ -151,6 +176,8 @@ Missing namespace identity or inaccessible evidence prevents observed terminatio
 ## Verification and operations
 
 `test/integration/environment-lifecycle.test.ts` exercises real namespaces with orphaned detached descendants through completion, stop, interrupt, timeout, launcher death, monitor death, a FIFO result, a FIFO event file and a symlink at the event file. Launcher death coverage first records the production callback's unknown proof, then verifies recovery can upgrade it. It checks a forged worker PID against a separate sentinel process.
+
+`node test/smoke/environment-consumer.mjs /path/to/pi` creates a consumer outside the package and verifies configured-package discovery, both explicit load orders and missing-service rejection without model work.
 
 Run `node --experimental-strip-types test/smoke/environment-background.mjs /path/to/pi` for the native SDK smoke. It uses a synthetic provider, two parent Pi processes, supervisor request/reply, retained resume, writable recovery replacement, definition drift, session-path rejection and context/filesystem canaries. Evidence remains in the printed temporary directory.
 

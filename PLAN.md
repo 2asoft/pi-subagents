@@ -61,6 +61,15 @@ Sol reviewed the code and these boundaries. The final workflow warning repair fo
 
 No implementation blocker remains for the original direct-delegation increment. This document retains the verification summary; temporary probes are removed after verification. Installation, configuration application, and publication require a later operator request.
 
+## External environment registration consumer
+
+Repair ownership: `8582a3b` documented a bare import that an external project cannot resolve through Pi package discovery. The operator requires a separate fix commit preserving that commit and `60a7fa0`.
+
+1. Reproduce the supplied external fixture. Done: `/tmp/pi-consumer-before.log` records module-resolution failure before model work.
+2. Publish a versioned registration service during extension initialization. Done with the existing registrar and registry, after the child-mode guard. Shared publisher ownership preserves the service until the last parent runtime shuts down. No additional policy loader or package-manager setup.
+3. Verify an external consumer using installed package settings and both explicit load orders, plus absent-service behavior. Done: all four native cases passed, including shutdown disposal. Typecheck/build passed; 3,313 unit tests passed and 13 skipped. Final review `6daa0928-4199-4074-8545-b5ee9d880ca5` found no remaining actionable findings after disposal and publisher-lifetime corrections. Evidence: `.work/consumer/*-publishers.log` and `/tmp/pi-environment-consumer-d4hzhv`.
+4. Consumer report: `/tmp/nt96663-pi-subagents-consumer-result.md`, published after committing with the verified route, commit ID and exact proposed retention/deadline controls. Those controls remain unimplemented and production configuration unchanged.
+
 ## Execution environment increment
 
 Status: implemented and verified under the approved Linux/bubblewrap contract. Structured policy, private authority, native startup, supervisor request/reply and resume are wired. Intermediate authority and lifetime findings were corrected; final follow-ups `5bc2bfba-7798-4b92-8495-bfa2ab1dc0cb` and `ac2729b1-e76d-4f4f-acce-f175d84bfdb1` report no findings. Generic tooling only; project policy and independent acceptance remain with NT96663. Current models, earlier commits and shared instructions are preserved.
