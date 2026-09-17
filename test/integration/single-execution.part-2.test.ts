@@ -62,7 +62,7 @@ import { resolveMissionStoreLocation } from "../../src/missions/store.ts";
 import { missionStatePath } from "../../src/missions/workflow-state.ts";
 import { discardPreservedWorktrees } from "../../src/runs/shared/parallel-handoff.ts";
 import { createWorktrees } from "../../src/runs/shared/worktree.ts";
-import { resolveAsyncResumeTarget } from "../../src/runs/background/async-resume.ts";
+import { readAsyncRecoveryDescriptor, resolveAsyncResumeTarget } from "../../src/runs/background/async-resume.ts";
 import { createResultWatcher } from "../../src/runs/background/result-watcher.ts";
 import { createWorkflowChildPermit, workflowChildPermitConsumed } from "../../src/shared/workflow-child-permit.ts";
 import { toSubagentDelegationExecutionParams, toSubagentDelegationUpdate } from "../../src/slash/delegation-adapters.ts";
@@ -1916,7 +1916,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(mockPi.callCount(), 2);
 	});
 
-	it("preserves an agent default output contract when foreground workflow resume omits output", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("preserves an agent default output contract and foreground context when workflow resume omits them", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const configuredOutput = path.join(tempDir, "configured-resume-output.md");
 		const agent = makeAgent("echo", { output: configuredOutput, outputMode: "file-only" });
 		const executor = makeExecutor([agent]);
@@ -1951,6 +1951,11 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		const resumed = resumedResult.details.results[0];
 		assert.match(resumed?.finalOutput ?? "", new RegExp(`Output saved to: ${escapeRegExp(configuredOutput)}`));
 		assert.equal(fs.readFileSync(configuredOutput, "utf-8"), "resumed report");
+		const runId = readCall().runtime?.runId;
+		assert.ok(runId);
+		const descriptor = readAsyncRecoveryDescriptor(path.join(DIRS.async, runId));
+		assert.ok(descriptor);
+		assert.equal(descriptor.context, "fresh");
 	});
 
 	it("preserves successful no-edit foreground resume output and transcript metadata", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
