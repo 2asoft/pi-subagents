@@ -17,6 +17,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { readEnvironmentBinding, environmentAuthorityDirectory } from "./environment-authority.ts";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { POLL_INTERVAL_MS } from "../../shared/types.ts";
 import { shouldUseNativeFsWatch } from "../../shared/watch-strategy.ts";
@@ -196,6 +197,7 @@ export function requestAsyncInterrupt(
 	payload: Omit<InterruptRequest, "type"> = {},
 	deps: { now?: () => number } = {},
 ): string {
+	if (readEnvironmentBinding(asyncDir)) writeAtomicJson(path.join(environmentAuthorityDirectory(asyncDir), "interrupt.json"), { type: "interrupt" });
 	const requestPath = interruptRequestPath(asyncDir);
 	const request: InterruptRequest = { ...payload, ts: payload.ts ?? deps.now?.() ?? Date.now(), type: "interrupt" };
 	writeAtomicJson(requestPath, request);
@@ -207,6 +209,7 @@ export function requestAsyncTimeout(
 	payload: Omit<TimeoutRequest, "type"> = {},
 	deps: { now?: () => number } = {},
 ): string {
+	if (readEnvironmentBinding(asyncDir)) writeAtomicJson(path.join(environmentAuthorityDirectory(asyncDir), "timeout.json"), { type: "timeout" });
 	const requestPath = timeoutRequestPath(asyncDir);
 	const request: TimeoutRequest = { ...payload, ts: payload.ts ?? deps.now?.() ?? Date.now(), type: "timeout" };
 	writeAtomicJson(requestPath, request);
@@ -224,6 +227,10 @@ export function requestAsyncStop(
 	}
 	const closedPath = stopInboxClosedPath(asyncDir);
 	if (fs.existsSync(closedPath)) throw new Error(STOP_INBOX_CLOSED_MESSAGE);
+	if (readEnvironmentBinding(asyncDir)) {
+		if (payload.childId !== undefined || (payload.targetIndex !== undefined && payload.targetIndex !== 0)) throw new Error("Environment stop requests must target the direct run.");
+		writeAtomicJson(path.join(environmentAuthorityDirectory(asyncDir), "stop.json"), { type: "stop" });
+	}
 	const request: StopRequest = { ...payload, ts: payload.ts ?? deps.now?.() ?? Date.now(), type: "stop" };
 	const requestPath = path.join(stopRequestsDir(asyncDir), stopRequestFileName(request));
 	(deps.write ?? writeAtomicJson)(requestPath, request);

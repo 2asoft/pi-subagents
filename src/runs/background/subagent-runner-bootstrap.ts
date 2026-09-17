@@ -248,10 +248,13 @@ if (isRunnerEntrypoint) {
 	if (configArg) {
 		try {
 			const config = JSON.parse(fs.readFileSync(configArg, "utf-8")) as unknown;
-			try {
-				fs.unlinkSync(configArg);
-			} catch {
-				// Temp-config cleanup is best effort.
+			validateSubagentRunConfig(config);
+			if (!config.executionEnvironment) {
+				try {
+					fs.unlinkSync(configArg);
+				} catch {
+					// Temp-config cleanup is best effort.
+				}
 			}
 			startConfiguredSubagent(config);
 		} catch (error) {

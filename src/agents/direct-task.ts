@@ -10,6 +10,7 @@ import type { AgentConfig } from "./agents.ts";
 export const DIRECT_TASK_AGENT = "$task";
 
 export const DirectTaskSchema = Type.Object({
+	executionEnvironment: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", description: "Registered Linux/bubblewrap environment for a native background direct leaf task." })),
 	instructions: Type.Optional(Type.String({ description: "Direct task system instructions." })),
 	tools: Type.Optional(Type.Array(Type.String({ pattern: "\\S" }), { description: "Direct task tools; [] for none." })),
 	extensions: Type.Optional(Type.Array(Type.String({ pattern: "\\S" }), { description: "Direct task extension paths; [] disables ambient loading." })),
@@ -27,13 +28,14 @@ export function hasDirectTaskOptions(input: DirectTaskInput): boolean {
 
 export function parseDirectTaskOptions(input: unknown): { ok: true; options: DirectTaskOptions } | { ok: false; error: string } {
 	if (!Check(DirectTaskSchema, input)) return { ok: false, error: `Invalid direct task options: ${JSON.stringify(Errors(DirectTaskSchema, input))}` };
-	const { instructions, tools, extensions, inheritProjectContext, inheritGlobalContext, inheritSkills } = input;
-	return { ok: true, options: { instructions, tools, extensions, inheritProjectContext, inheritGlobalContext, inheritSkills } };
+	const { instructions, tools, extensions, inheritProjectContext, inheritGlobalContext, inheritSkills, executionEnvironment } = input;
+	return { ok: true, options: { instructions, tools, extensions, inheritProjectContext, inheritGlobalContext, inheritSkills, ...(executionEnvironment ? { executionEnvironment } : {}) } };
 }
 
 export function createDirectTaskAgent(options: DirectTaskOptions, cwd: string): AgentConfig {
 	return {
 		name: DIRECT_TASK_AGENT,
+		...(options.executionEnvironment ? { executionEnvironment: options.executionEnvironment } : {}),
 		description: "Execute the supplied task.",
 		systemPrompt: options.instructions ?? "",
 		systemPromptMode: "append",
@@ -53,6 +55,7 @@ export function createDirectTaskAgent(options: DirectTaskOptions, cwd: string): 
 export function directTaskOptionsFromAgent(agent: AgentConfig): DirectTaskOptions {
 	return {
 		instructions: agent.systemPrompt,
+		...(agent.executionEnvironment ? { executionEnvironment: agent.executionEnvironment } : {}),
 		...(agent.tools !== undefined ? { tools: [...agent.tools] } : {}),
 		...(agent.extensions !== undefined ? { extensions: [...agent.extensions] } : {}),
 		inheritProjectContext: agent.inheritProjectContext,

@@ -8,7 +8,7 @@ Call `{ action: "guide", topic: "tool-reference" }` for this reference or `topic
 
 ## Execution examples
 
-Use `{ task, model?, tools?, instructions?, extensions? }` for a direct child. No profile file is required. Supply exact skill instructions and evidence. See [Direct task delegation](direct-delegation.md) for defaults, inheritance, providers, and retained contracts. Select `agent` explicitly when its profile behavior is wanted.
+Use `{ task, model?, tools?, instructions?, extensions? }` for a direct child. No profile file is required. Supply exact skill instructions and evidence. See [Direct task delegation](direct-delegation.md) for defaults, inheritance, providers, and retained contracts. Select `agent` explicitly when its profile behavior is wanted. `executionEnvironment` selects a registered Linux/bubblewrap policy for a native background direct leaf; see [the environment contract and restrictions](execution-environments.md).
 
 Chaining is code-driven through a workflow script. Write the script as one ```` ```js workflow ```` fenced block in the reply, then call `subagent({ workflow: true, ... })` in the same reply. A `workflow` string containing `/` is a script file, and any other string is a named resource. `workflowScript` and `workflowScriptPath` were removed; use these forms instead.
 

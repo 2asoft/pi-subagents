@@ -164,6 +164,17 @@ describe("direct skill delegation", () => {
 		assert.equal(readAllCallArgs().length, 2, "missing configuration must not launch a child with default access");
 	});
 
+	it("rejects an execution environment request instead of launching outside it", async () => {
+		mockPi.onCall({ output: "must not execute" });
+		const executor = makeExecutor([], {}, false);
+		const result = await executor.executePublic("environment-admission", {
+			task: "Do not execute outside the requested environment.", executionEnvironment: "unregistered-environment",
+			tools: [], async: false,
+		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		assert.equal(result.isError, true);
+		assert.equal(readAllCallArgs(true).length, 0);
+	});
+
 	it("resumes a direct foreground task through the background runner with its original tool contract", { timeout: 30_000 }, async () => {
 		mockPi.onCall({ output: "PASS" });
 		const executor = makeExecutor([], {}, false);
