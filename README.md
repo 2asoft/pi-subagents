@@ -10,7 +10,7 @@
 
 ## Local fork
 
-This checkout adds [direct task delegation](docs/direct-delegation.md). Omit `agent` and supply the exact skill task, model, tools, and required context. Named profiles remain available explicitly.
+This checkout adds [direct task delegation](docs/direct-delegation.md). Omit `agent` and supply the exact skill task, model, tools, and required context. Named profiles remain available explicitly. [Linux execution environments](docs/execution-environments.md) add registered bubblewrap policies for confined native background leaves.
 
 Load this checkout for a session:
 

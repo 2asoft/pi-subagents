@@ -362,7 +362,7 @@ const SubagentParamProperties = {
 	async: Type.Optional(Type.Boolean({ description: "Background; default asyncByDefault. false only to block parent." })),
 	timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Timeout. Foreground and single async runs use config timeoutMs, else 30m; async composites have no default parent deadline. Alias maxRuntimeMs." })),
 	maxRuntimeMs: Type.Optional(Type.Integer({ minimum: 1, description: "Alias timeoutMs (same defaults)." })),
-	checkpointBeforeDeadlineMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_147_483_647, description: "Async single-agent runs only: the runner requests that the child checkpoint and stop this many ms before the run deadline (best-effort; the deadline kill still applies)." })),
+	checkpointBeforeDeadlineMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_147_483_647, description: "Async single child: request checkpoint this many ms before deadline; deadline still kills." })),
 	toolTimeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Per-tool deadline (ms); fast builtins default 5m." })),
 	toolBudget: Type.Optional(ToolBudgetOverride),
 	usageBudget: Type.Optional(UsageBudgetOverride),
@@ -396,7 +396,7 @@ const SubagentParamProperties = {
 			{ type: "string", minLength: 1 },
 			{ type: "object", properties: { command: { type: "string", minLength: 1 }, output: { type: "string", enum: ["json"] }, schema: { type: "object" }, timeoutMs: { type: "integer", minimum: 1 } }, required: ["command"], additionalProperties: false },
 		],
-		description: "Host gate command run after the child finishes: a string, or { command, output: \"json\", schema?, timeoutMs? } whose passing stdout becomes structuredOutput (not with outputSchema). Cannot be combined with acceptance; an explicit acceptance of false is treated as omitted.",
+		description: "Host gate: string or { command, output: \"json\", schema?, timeoutMs? }. JSON stdout sets structuredOutput; rejects outputSchema. Cannot be combined with acceptance except false.",
 	})),
 };
 

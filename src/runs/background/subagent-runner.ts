@@ -171,6 +171,11 @@ const INTERCOM_DETACH_RECEIPT = "Detached for intercom coordination before task 
 process.env[SUBAGENT_CHILD_ENV] = "1";
 
 export interface SubagentRunConfig {
+	executionEnvironment?: string;
+	environmentSessionId?: string;
+	environmentSourceRunId?: string;
+	environmentHostPid?: number;
+	leafFanoutBudget?: import("../../shared/types.ts").RunFanoutBudgetSnapshot;
 	id: string;
 	steps: RunnerStep[];
 	resultPath: string;
@@ -2031,7 +2036,7 @@ export async function runSubagent(
 		...(config.deadlineAt !== undefined ? { deadlineAt: config.deadlineAt } : {}),
 		...(config.toolBudget ? { toolBudget: initialToolBudgetState(config.toolBudget) } : {}),
 		...(config.usageBudget ? { usageBudget: usageBudgetState(config.usageBudget, undefined) } : {}),
-		pid: process.pid,
+		pid: config.environmentHostPid ?? process.pid,
 		cwd,
 		currentStep: 0,
 		chainStepCount: steps.length,
@@ -2040,7 +2045,7 @@ export async function runSubagent(
 		...(config.launchContractDigest ? { launchContractDigest: config.launchContractDigest } : {}),
 		...(config.launchResolvedExtensions ? { launchResolvedExtensions: config.launchResolvedExtensions } : {}),
 		...(config.capabilityCeiling ? { capabilityCeiling: config.capabilityCeiling } : {}),
-		...(config.runFanoutBudget ? { runFanoutBudget: getRunFanoutBudgetSnapshot(config.runFanoutBudget) } : {}),
+		...(config.leafFanoutBudget ? { runFanoutBudget: config.leafFanoutBudget } : config.runFanoutBudget ? { runFanoutBudget: getRunFanoutBudgetSnapshot(config.runFanoutBudget) } : {}),
 		...(config.parentWorkflowRunId ? { parentWorkflowRunId: config.parentWorkflowRunId } : {}),
 		...(config.workflowKey ? { workflowKey: config.workflowKey } : {}),
 		...(config.lane ? { lane: config.lane } : {}),
@@ -5241,10 +5246,12 @@ if (configArg) {
 	try {
 		const configJson = fs.readFileSync(configArg, "utf-8");
 		const config = JSON.parse(configJson) as SubagentRunConfig;
-		try {
-			fs.unlinkSync(configArg);
-		} catch {
-			// Temp config cleanup is best effort.
+		if (!config.executionEnvironment) {
+			try {
+				fs.unlinkSync(configArg);
+			} catch {
+				// Temp config cleanup is best effort.
+			}
 		}
 		startConfiguredSubagent(config);
 	} catch (err) {

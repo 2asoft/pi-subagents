@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { appendRunEvent } from "../background/environment-authority.ts";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { discoverAgents, findBlockingAgentDiagnostic, formatUnknownAgentError, resolveAgentName, unknownAgentDiagnosticContext, type AgentConfig, type AgentDiscoveryDiagnostic, type AgentScope, type UnknownAgentDiagnosticContext } from "../../agents/agents.ts";
@@ -24,6 +25,7 @@ import { handleRefinementAction } from "../../agents/agent-refinements.ts";
 import { buildDoctorReport } from "../../extension/doctor.ts";
 import { readSubagentGuide } from "../../extension/subagent-guide.ts";
 import { createDirectTaskAgent, DIRECT_TASK_AGENT, directTaskOptionsFromAgent, hasDirectTaskOptions, parseDirectTaskOptions, persistDirectTaskOptions, readDirectTaskOptions, type DirectTaskOptions } from "../../agents/direct-task.ts";
+import { resolveExecutionEnvironment } from "../../shared/execution-environments.ts";
 import { normalizePublicSubagentExecution, validateWorkflowCapacityOverrides } from "../../extension/public-execution.ts";
 import { runSync } from "./execution.ts";
 import { handleWatchdogToolAction, WATCHDOG_TOOL_ACTIONS } from "../../watchdog/tool-actions.ts";
@@ -1147,7 +1149,7 @@ function persistAsyncWorkflowControlEvent(input: {
 			: {}),
 	};
 	try {
-		fs.appendFileSync(path.join(input.job.asyncDir, "events.jsonl"), `${JSON.stringify(record)}\n`, "utf-8");
+		appendRunEvent(input.job.asyncDir, `${JSON.stringify(record)}\n`);
 	} catch (error) {
 		if (!isStorageCapacityError(error)) throw error;
 		console.error("Failed to append async workflow control event while storage is full:", error);
@@ -7048,6 +7050,18 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			if (typeof effectiveParams.task !== "string" || !effectiveParams.task.trim()) return buildRequestedModeError(effectiveParams, "Direct execution requires a non-empty task.");
 			const parsed = parseDirectTaskOptions(effectiveParams);
 			if (!parsed.ok) return buildRequestedModeError(effectiveParams, parsed.error);
+			if (parsed.options.executionEnvironment) {
+				const invalid = process.platform !== "linux" || effectiveParams.async !== true || effectiveParams.context !== "fresh"
+					|| parsed.options.inheritProjectContext !== false || parsed.options.inheritGlobalContext !== false || parsed.options.inheritSkills !== false
+					|| !parsed.options.tools || parsed.options.tools.some(tool => ["subagent", "subagent_supervisor"].includes(tool))
+					|| (effectiveParams.worktree ?? deps.config.worktree) === true || effectiveParams.machine !== undefined
+					|| (effectiveParams.acceptance !== undefined && effectiveParams.acceptance !== false) || effectiveParams.gate !== undefined
+					|| (effectiveParams.output !== undefined && effectiveParams.output !== false) || (effectiveParams.skill !== undefined && effectiveParams.skill !== false)
+					|| (parsed.options.extensions?.length ?? 0) > 0;
+				if (invalid) return buildRequestedModeError(effectiveParams, "Execution environments require a Linux native background direct leaf, explicit fresh context, disabled context/skill inheritance, explicit leaf tools, prepared cwd, and no host acceptance, output or extension selection.");
+				try { resolveExecutionEnvironment(ctx.sessionManager.getSessionId(), parsed.options.executionEnvironment, [effectiveCwd]); }
+				catch (error) { return buildRequestedModeError(effectiveParams, error instanceof Error ? error.message : String(error)); }
+			}
 			const agent = createDirectTaskAgent(parsed.options, effectiveCwd);
 			discoveredAgents = [agent, ...discoveredAgents.filter(entry => entry.name !== DIRECT_TASK_AGENT)];
 			effectiveParams = {

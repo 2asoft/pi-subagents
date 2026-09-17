@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { appendRunEvent } from "./environment-authority.ts";
 import { writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import { TEMP_ROOT_DIR, type ActiveAsyncCapacitySnapshot, type AsyncStatus } from "../../shared/types.ts";
 import { readStatus } from "../../shared/utils.ts";
@@ -197,13 +198,13 @@ function appendAbandonedReleaseEvent(asyncDir: string, owner: ActiveAsyncCapacit
 	try {
 		const eventsPath = path.join(asyncDir, "events.jsonl");
 		fs.mkdirSync(path.dirname(eventsPath), { recursive: true });
-		fs.appendFileSync(eventsPath, `${JSON.stringify({
+		appendRunEvent(asyncDir, `${JSON.stringify({
 			type: "subagent.capacity.released",
 			ts: now,
 			runId: owner.runId,
 			sessionId: owner.ownerSessionId,
 			...evidence,
-		})}\n`, "utf-8");
+		})}\n`);
 	} catch {
 		// Capacity release must not fail because its diagnostic event cannot be written.
 	}

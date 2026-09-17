@@ -78,11 +78,11 @@ Request `contact_supervisor` in a direct child's `tools` to provision the native
   tools: ["read", "contact_supervisor"], async: true }
 ```
 
-The child uses `contact_supervisor` with `action: "ask"`, `reason: "need_decision"` and `message`. The parent reads `subagent_supervisor({ action: "pending" })` and replies with `{ action: "reply", replyTo: requestId, message }`. Ordinary steering does not answer a blocking question.
+The child uses `contact_supervisor` with `reason: "need_decision"` and `message`. The parent reads `subagent_supervisor({ action: "pending" })` and replies with `{ action: "reply", replyTo: requestId, message }`. Ordinary steering does not answer a blocking question.
 
 Missing routing, tool restrictions that remove the requested supervisor, or unavailable required direct tools fail before model execution. Availability is checked after native tool registration. Named profiles retain their existing bridge/tool behavior. Resume retains the explicit tool request and provisions routing for the resumed run.
 
-Execution environments and unlimited waits are still proposals; see [the API and resource inventory](execution-environment-proposal.md).
+For confined native background tasks, see [Linux execution environments](execution-environments.md). Unlimited waits remain a separate proposal.
 
 ## Controls and resume
 

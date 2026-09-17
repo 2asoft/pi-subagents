@@ -4,10 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createAtomicJsonWriter } from "../../shared/atomic-json.ts";
 import { TEMP_ROOT_DIR } from "../../shared/types.ts";
+import { environmentProcessState, readEnvironmentOwner } from "../background/environment-process-identity.ts";
+import { readEnvironmentBinding } from "../background/environment-authority.ts";
 
 export const SESSION_LEASES_DIR = path.join(TEMP_ROOT_DIR, "session-leases");
 
 export interface SessionLeaseRequest {
+	environmentRunDirectory?: string;
 	sessionFile: string;
 	runId: string;
 	sourceRunId: string;
@@ -15,6 +18,7 @@ export interface SessionLeaseRequest {
 }
 
 export interface SessionLeaseOwner {
+	environmentRunDirectory?: string;
 	version: 1;
 	token: string;
 	canonicalSessionFile: string;
@@ -134,6 +138,7 @@ function parseOwner(value: unknown): SessionLeaseOwner | undefined {
 		|| typeof owner.acquiredAt !== "string"
 		|| typeof owner.acquiredAtMs !== "number"
 		|| typeof owner.updatedAtMs !== "number") return undefined;
+	if (owner.environmentRunDirectory !== undefined && (typeof owner.environmentRunDirectory !== "string" || !path.isAbsolute(owner.environmentRunDirectory))) return undefined;
 	if (owner.parentSessionId !== undefined && typeof owner.parentSessionId !== "string") return undefined;
 	if (owner.processStartIdentity !== undefined && typeof owner.processStartIdentity !== "string") return undefined;
 	if (owner.writerPid !== undefined && (typeof owner.writerPid !== "number" || !Number.isInteger(owner.writerPid) || owner.writerPid <= 0)) return undefined;
@@ -173,6 +178,12 @@ function processDemonstrablyGone(
 
 function demonstrablyStale(owner: SessionLeaseOwner, options: Required<Pick<SessionLeaseOptions, "hostname" | "isProcessAlive" | "getProcessStartIdentity">>): boolean {
 	if (owner.hostname !== options.hostname) return false;
+	if (owner.environmentRunDirectory) {
+		const binding = readEnvironmentBinding(owner.environmentRunDirectory);
+		const processes = readEnvironmentOwner(owner.environmentRunDirectory);
+		return binding?.runId === owner.runId && processes !== undefined
+			&& [processes.owner, processes.monitor, processes.namespace.identity].every(identity => environmentProcessState(identity) === "terminated");
+	}
 	if (!processDemonstrablyGone(owner.pid, owner.processStartIdentity, options)) return false;
 	if (owner.writerState === "spawning") return false;
 	if (owner.writerState === "none") return true;
@@ -215,6 +226,7 @@ export function acquireSessionLease(request: SessionLeaseRequest, options: Sessi
 		version: 1,
 		token: options.token?.() ?? randomUUID(),
 		canonicalSessionFile,
+		...(request.environmentRunDirectory ? { environmentRunDirectory: request.environmentRunDirectory } : {}),
 		runId: request.runId,
 		sourceRunId: request.sourceRunId,
 		...(request.parentSessionId ? { parentSessionId: request.parentSessionId } : {}),

@@ -124,6 +124,7 @@ test("published extension APIs use supported package entrypoints", async () => {
 		"./capability-ceiling": "./src/api/capability-ceiling.ts",
 		"./workflow-resources": "./src/api/workflow-resources.ts",
 		"./required-child-extensions": "./src/api/required-child-extensions.ts",
+		"./execution-environments": "./src/api/execution-environments.ts",
 		"./delegation": "./src/api/delegation.ts",
 		"./preflight": "./src/api/preflight.ts",
 		"./control-channel": "./src/api/control-channel.ts",

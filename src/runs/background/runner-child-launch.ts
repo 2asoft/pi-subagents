@@ -1,5 +1,6 @@
 /** Native runner construction, separate from its executable entrypoint and attempt loop. */
 import * as path from "node:path";
+import * as fs from "node:fs";
 import { buildInProcessChildLaunch, type BuildInProcessChildLaunchInput, type InheritedChildRuntime } from "../shared/child-launch.ts";
 import { deriveForkPromptCacheKey } from "../shared/child-tool-plan.ts";
 import { normalizeExtensionBindings } from "../shared/extension-bindings.ts";
@@ -33,6 +34,8 @@ export function buildRunnerChildLaunch(step: RunnerSubagentStep, ctx: RunnerChil
 	const acceptancePrompt = step.effectiveAcceptance
 		? formatAcceptancePrompt(step.effectiveAcceptance, { reportOptional: isAgentContract(step.agentContract), structuredOutput: Boolean(step.structuredOutput?.acceptanceReportPath) })
 		: "";
+	const admitted = step.environmentContext;
+	const systemPrompt = [step.systemPrompt ?? "", ...(admitted ? [...admitted.instructionFiles, ...admitted.skillFiles].map(file => fs.readFileSync(file, "utf8")) : [])].join("\n\n");
 	return buildInProcessChildLaunch({
 		machine: step.machine,
 		remoteSkillNames: step.skills,
@@ -55,7 +58,7 @@ export function buildRunnerChildLaunch(step: RunnerSubagentStep, ctx: RunnerChil
 		subagentOnlyExtensions: step.subagentOnlyExtensions,
 		requiredExtensions: step.requiredExtensions,
 		fast: step.fast,
-		systemPrompt: acceptancePrompt ? `${step.systemPrompt ?? ""}\n${acceptancePrompt}` : step.systemPrompt ?? "",
+		systemPrompt: acceptancePrompt ? `${systemPrompt}\n${acceptancePrompt}` : systemPrompt,
 		systemPromptMode: step.systemPromptMode,
 		mcpDirectTools: step.mcpDirectTools,
 		extensionBindings: normalizeExtensionBindings(step.extensionBindings)?.value,

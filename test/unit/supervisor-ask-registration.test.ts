@@ -217,7 +217,7 @@ describe("supervisor ask registration", () => {
 				await child.emit("session_start");
 				await child.emit("agent_start");
 				assert.deepEqual(child.active(), ["contact_supervisor"]);
-				const answer = child.call("contact_supervisor", { action: "ask", reason: "need_decision", message: "Choose a branch." });
+				const answer = child.call("contact_supervisor", { reason: "need_decision", message: "Choose a branch." });
 				void answer.catch(() => {});
 				await waitForCondition(() => fs.readdirSync(path.join(launch.session.runtime.supervisorChannelDir!, "requests")).length > 0, "direct supervisor request");
 				await tools.get(NATIVE_SUPERVISOR_TOOL_NAME)!.execute("pending", { action: "pending" });
@@ -1116,7 +1116,6 @@ describe("supervisor ask registration", () => {
 			// The child blocks here exactly as it does in production: inside an open tool call,
 			// polling its reply file.
 			const blocked = childTools.get("contact_supervisor")!.execute("ask", {
-				action: "ask",
 				reason: "need_decision",
 				message: "Which option should I take?",
 			} as never);

@@ -647,6 +647,7 @@ export interface RunnerProcessInstanceExit {
 }
 
 export type ProcessTreeTerminal =
+	| { state: "observed"; mechanism: "linux-pid-namespace"; namespaceId: number; verifiedAt: number }
 	| {
 		state: "observed";
 		mechanism: "posix-process-group";
@@ -799,6 +800,7 @@ export interface RunFanoutRejection extends RunFanoutBudgetSnapshot {
 }
 
 export interface SteeringRecoveryDescriptor {
+	executionEnvironment?: string;
 	/** Captured response identity authority; absence means no declared aliases on revival. */
 	modelResponseAliases?: Record<string, string[]>;
 	version: 1;

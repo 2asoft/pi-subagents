@@ -1,5 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { readEnvironmentBinding, appendRunEvent } from "./environment-authority.ts";
+import { readEnvironmentOwner, environmentProcessState } from "./environment-process-identity.ts";
+import { recoverEnvironmentTermination } from "./environment-termination.ts";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { resultFilePath, resultPayloadPathForSessionRun, writeAsyncResultFile } from "./result-files.ts";
 import { updateActiveRunIndex } from "./active-run-index.ts";
@@ -84,7 +87,7 @@ function isNotFoundError(error: unknown): boolean {
 function appendJsonlBestEffort(filePath: string, payload: object): void {
 	try {
 		fs.mkdirSync(path.dirname(filePath), { recursive: true });
-		fs.appendFileSync(filePath, `${JSON.stringify(payload)}\n`, "utf-8");
+		appendRunEvent(path.dirname(filePath), `${JSON.stringify(payload)}\n`);
 	} catch {
 		// Repair status/result writes are the important path. A broken or full
 		// diagnostic event log must not make stale-run reconciliation fail.
@@ -367,6 +370,12 @@ export function reconcileAsyncRun(asyncDir: string, options: ReconcileAsyncRunOp
 	const startedStatus = !status && options.startedRun ? buildStartedStatus(asyncDir, options.startedRun, now) : undefined;
 	const effectiveStatus = status ?? startedStatus;
 	if (!effectiveStatus) return { status: null, repaired: false };
+	if (readEnvironmentBinding(asyncDir)) {
+		const owner = readEnvironmentOwner(asyncDir);
+		if (!owner || environmentProcessState(owner.owner) !== "terminated") return { status: effectiveStatus, repaired: false };
+		if (!recoverEnvironmentTermination(asyncDir)) return { status: { ...effectiveStatus, state: "failed" }, repaired: false, message: "Environment termination remains unobserved." };
+		if (effectiveStatus.state === "running" || effectiveStatus.state === "queued") return writeFailedRepair(asyncDir, effectiveStatus, resultFilePath(options.resultsDir ?? DIRS.results, effectiveStatus.runId), now, "Environment owner terminated before recording a terminal run state.");
+	}
 	assertWorkflowGraphHostSteps(effectiveStatus.workflowGraph, path.join(asyncDir, "status.json"), effectiveStatus.runId);
 	const statusPath = path.join(asyncDir, "status.json");
 	for (const [index, step] of (effectiveStatus.steps ?? []).entries()) {

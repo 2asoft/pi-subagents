@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { environmentStatus } from "../runs/background/environment-status.ts";
+import { environmentAuthorityDirectory, readEnvironmentFile, admitEnvironmentRunDirectory } from "../runs/background/environment-authority.ts";
 import type { Message, Usage as PiUsage } from "@earendil-works/pi-ai";
 import { previewDisplayText, sanitizeDisplayText, truncateDisplayText } from "./display-text.ts";
 import { formatToolCall } from "./formatters.ts";
@@ -138,6 +140,7 @@ export function readStatus(asyncDir: string): AsyncStatus | null {
 	if (Buffer.byteLength(path.basename(asyncDir), "utf-8") > 255) {
 		return null;
 	}
+	admitEnvironmentRunDirectory(asyncDir);
 	const statusPath = path.join(asyncDir, "status.json");
 
 	let stat: fs.Stats;
@@ -163,12 +166,12 @@ export function readStatus(asyncDir: string): AsyncStatus | null {
 	) {
 		statusCache.delete(statusPath);
 		statusCache.set(statusPath, cached);
-		return cached.status;
+		return environmentStatus(asyncDir, cached.status);
 	}
 
 	let content: string;
 	try {
-		content = fs.readFileSync(statusPath, "utf-8");
+		content = fs.existsSync(environmentAuthorityDirectory(asyncDir)) ? readEnvironmentFile(statusPath) : fs.readFileSync(statusPath, "utf-8");
 	} catch (error) {
 		if (isNotFoundError(error)) {
 			statusCache.delete(statusPath);
@@ -207,7 +210,7 @@ export function readStatus(asyncDir: string): AsyncStatus | null {
 		if (oldest === undefined) break;
 		statusCache.delete(oldest);
 	}
-	return status;
+	return environmentStatus(asyncDir, status);
 }
 
 export function getLastActivity(outputFile: string | undefined): string {

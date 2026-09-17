@@ -211,6 +211,7 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 			return { ok: false, error: "Direct task options require omitting agent; named profiles supply their own execution configuration.", mode: "workflow" };
 		}
 		if (params.agent === undefined) {
+			if (params.executionEnvironment !== undefined && params.async !== true) return { ok: false, error: "Execution environments require explicit async: true.", mode: "workflow" };
 			if (typeof params.task !== "string" || !params.task.trim()) return { ok: false, error: "Direct execution requires a non-empty task.", mode: "workflow" };
 			return { ok: true, params: { ...params, output: params.output ?? false } };
 		}

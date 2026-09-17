@@ -61,6 +61,19 @@ Sol reviewed the code and these boundaries. The final workflow warning repair fo
 
 No implementation blocker remains for the original direct-delegation increment. This document retains the verification summary; temporary probes are removed after verification. Installation, configuration application, and publication require a later operator request.
 
+## Execution environment increment
+
+Status: implemented and verified under the approved Linux/bubblewrap contract. Structured policy, private authority, native startup, supervisor request/reply and resume are wired. Intermediate authority and lifetime findings were corrected; final follow-ups `5bc2bfba-7798-4b92-8495-bfa2ab1dc0cb` and `ac2729b1-e76d-4f4f-acce-f175d84bfdb1` report no findings. Generic tooling only; project policy and independent acceptance remain with NT96663. Current models, earlier commits and shared instructions are preserved.
+
+1. Inspect lifecycle, context construction, registration and recovery. Bubblewrap 0.12.0 can create a synthetic user/PID namespace here. Host authority must live outside worker-writable run directories. Parent-owned close observation must move to a persistent launcher for confined runs.
+2. Implement the trusted named adapter contract and admission restrictions. Structured bubblewrap policy uses session-scoped extension registration, shared across loaders, with pinned definition targets and bytes. Node builtins are permitted. Public admission rejects unsupported modes. Canonical protected roots include authority, session leases, results and fanout budgets. Project review owns mount policy.
+3. Implement detached host ownership, sanitized per-run bootstrap/results, admitted context construction inside the namespace, and leaf budget snapshots. Keep host identity, bubblewrap monitor and namespace PID distinct. Host-only ownership/proof paths are never mounted.
+4. Integrate controls, parent restart, canonical session lease and pinned resume. Implemented host identity recovery, protected lease reclamation and owner acknowledgement before model authorization. Never infer device handback from lifecycle state.
+5. Verification passed: nine real namespace cases, including orphaned detached descendants, launcher/monitor death, unknown-proof recovery and hostile event/result files. Native Pi smoke passed across two parent processes with supervisor reply, original-binding resume after metadata replacement, drift rejection and session/context canaries. Evidence: `.work/environment/native-final.log`, `/tmp/pi-environment-native-jeHo2Y`, and `.work/environment/lifecycle-final.log`.
+6. Typecheck, package build, diff checks, 3,310 unit tests and 1,072 integration tests passed; 20 skipped. The initial synchronous API regression and export inventory failures are fixed. Review is complete. Delivery commit, checks and limitations belong in `/tmp/nt96663-pi-subagents-environment-result.md`. Failed evidence remains in `.work/environment/`.
+
+Retention, unlimited deadlines and cache policy remain separate. Do not publish or modify project repositories.
+
 ## Explicit supervisor increment
 
 Scope agreed with NT96663: provision explicitly requested direct `contact_supervisor` without bridge prose, enforce availability before model work, preserve named profiles and tool restrictions. Environment implementation, retention/deadlines, cache policy and project acceptance remain separate increments.
@@ -69,7 +82,7 @@ Scope agreed with NT96663: provision explicitly requested direct `contact_superv
 2. Provision routing from the explicit direct tool request; require direct tools after native registration. Done. Named-profile exceptions remain unchanged.
 3. Verify request/reply and retained tool contract on resume. Done: native file protocol tests and foreground-to-background resume integration pass.
 4. Verify unavailable-tool failure releases child extensions before model work. Done: cleanup assertion failed before moving admission to the normal bounded shutdown path. Installed Pi SDK smoke verifies real registration, rejection and both shutdown events without model prompts.
-5. Document proposed environment API and exact resources. Done in `docs/execution-environment-proposal.md`; no environment implementation. Review identified the leaf's shared budget read and omitted host terminal proof file; both are now explicit.
+5. Document proposed environment API and exact resources. Done as a proposal in commit `60a7fa0`; the current contract is in `docs/execution-environments.md`. Review identified the leaf's shared budget read and omitted host terminal proof file; both are now explicit.
 6. Complete final repository checks and review follow-up, then commit locally. Done: typecheck and package build pass; 3,303 unit and 1,062 integration tests pass, with 20 skipped. Diff checks pass. Review follow-up `bc310a96-21e2-4f4a-bbcd-1c588b6a7018` returned "No findings." Commit remains local; active sessions require reload to use the correction.
 
 The inherited `PI_OFFLINE=1` causes two Windows global-discovery unit failures on both unchanged HEAD and the working tree. `env -u PI_OFFLINE npm run test:unit` passes. No global environment setting was changed.
