@@ -1,5 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { admitEnvironmentSession, readEnvironmentBinding, environmentAuthorityDirectory } from "./environment-authority.ts";
+import { readProcessTerminal } from "./process-terminal.ts";
+import { recoverEnvironmentTermination } from "./environment-termination.ts";
 import { DIRS, type AcceptanceInput, type AsyncStatus, type SteeringRecoveryDescriptor, type SubagentRunMode } from "../../shared/types.ts";
 import type { AgentConfig } from "../../agents/agents.ts";
 import { DIRECT_TASK_AGENT } from "../../agents/direct-task.ts";
@@ -230,6 +233,7 @@ export function resolveAsyncRunLocation(params: AsyncResumeParams, asyncDirRoot:
 	if (params.dir) {
 		const asyncDir = path.resolve(params.dir);
 		assertInsideRoot(asyncRoot, asyncDir, "Async run directory");
+		if (path.dirname(asyncDir) !== asyncRoot) throw new Error("Async run directory must be an immediate child of its managed root.");
 		const resolvedId = requestedId ?? path.basename(asyncDir);
 		if (requestedId && requestedId !== path.basename(asyncDir)) {
 			throw new Error(`Async run id '${requestedId}' does not match directory '${path.basename(asyncDir)}'.`);
@@ -313,8 +317,12 @@ function resumeTargetMode(status: AsyncStatus | null, result: AsyncResultFile | 
 
 export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): SteeringRecoveryDescriptor | undefined {
 	if (!asyncDir) return undefined;
-	const descriptorPath = path.join(asyncDir, "recovery-descriptor.json");
-	if (!fs.existsSync(descriptorPath)) return undefined;
+	const binding = readEnvironmentBinding(asyncDir);
+	const descriptorPath = path.join(binding ? environmentAuthorityDirectory(asyncDir) : asyncDir, "recovery-descriptor.json");
+	if (!fs.existsSync(descriptorPath)) {
+		if (binding) throw new Error("Authoritative environment recovery descriptor is missing; refusing fallback.");
+		return undefined;
+	}
 	let value: unknown;
 	try {
 		value = JSON.parse(fs.readFileSync(descriptorPath, "utf-8"));
@@ -324,7 +332,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': expected an object.`);
 	const parsed = value as Record<string, unknown>;
 	const allowedFields = new Set([
-		"modelResponseAliases", "version", "launchContractDigest", "sourceRunId", "agentContract", "agent", "sessionFile", "cwd", "model", "modelProvider", "modelOverrideFromParent", "modelOrigin", "fast", "thinking", "thinkingCeiling", "tools", "allowNestedSubagents", "allowedAgents", "extensions",
+		"executionEnvironment", "modelResponseAliases", "version", "launchContractDigest", "sourceRunId", "agentContract", "agent", "sessionFile", "cwd", "model", "modelProvider", "modelOverrideFromParent", "modelOrigin", "fast", "thinking", "thinkingCeiling", "tools", "allowNestedSubagents", "allowedAgents", "extensions",
 		"subagentOnlyExtensions", "mcpDirectTools", "excludeTools", "mutationTools", "systemPrompt", "systemPromptMode", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "skills",
 		"skillPath", "agentFilePath", "memory", "outputPath", "outputMode", "structuredOutputSchema", "acceptance", "sessionDir", "artifactConfig",
 		"artifactsDir", "maxOutput", "controlConfig", "context", "intercomBridge", "absoluteDeadlineAt", "initialTurnBudget", "initialToolBudget", "maxSubagentDepth", "share", "capabilityCeiling",
@@ -382,7 +390,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 		if (item !== undefined && (!Array.isArray(item) || item.some((entry) => typeof entry !== "string" || !entry.trim()))) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must contain non-empty strings.`);
 	}
 	if (parsed.systemPrompt !== undefined && typeof parsed.systemPrompt !== "string") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': systemPrompt must be a string.`);
-	for (const field of ["launchContractDigest", "sessionFile", "model", "modelProvider", "thinking", "agentFilePath", "outputPath", "sessionDir", "artifactsDir"] as const) {
+	for (const field of ["executionEnvironment", "launchContractDigest", "sessionFile", "model", "modelProvider", "thinking", "agentFilePath", "outputPath", "sessionDir", "artifactsDir"] as const) {
 		if (parsed[field] !== undefined && (typeof parsed[field] !== "string" || !(parsed[field] as string).trim())) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must be a non-empty string.`);
 	}
 	if (parsed.baseRef !== undefined) {
@@ -479,9 +487,16 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 	const status = reconciliation?.status ?? null;
 	validateStatusForResume(status, location.asyncDir ? path.join(location.asyncDir, "status.json") : "status.json");
 	const recoveryDescriptor = readAsyncRecoveryDescriptor(location.asyncDir ?? undefined);
+	const environmentBinding = location.asyncDir ? readEnvironmentBinding(location.asyncDir) : undefined;
+	if (environmentBinding && location.asyncDir) {
+		recoverEnvironmentTermination(location.asyncDir);
+		if (readProcessTerminal(location.asyncDir)?.state !== "observed") throw new Error("Confined resume requires observed host termination proof.");
+		if (recoveryDescriptor?.executionEnvironment !== environmentBinding.environment.name) throw new Error("Environment recovery identity differs from its host binding.");
+	}
 	const result = location.resultPath ? readResultFile(location.resultPath) : undefined;
 	const runId = status?.runId ?? result?.runId ?? result?.id ?? location.resolvedId ?? (location.asyncDir ? path.basename(location.asyncDir) : "unknown");
 	const mode = resumeTargetMode(status, result);
+	if (environmentBinding && mode !== "single") throw new Error("Confined recovery metadata must describe a single direct child.");
 	if (options.sessionId && ((status && status.sessionId !== options.sessionId) || (result && result.sessionId !== options.sessionId))) {
 		throw new Error(`Async run '${runId}' was not found in the active session.`);
 	}
@@ -493,6 +508,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 	const statusSteps = status?.steps ?? [];
 	const resultSteps = result?.results ?? [];
 	const stepCount = statusSteps.length || resultSteps.length || (result?.agent ? 1 : 0);
+	if (environmentBinding && stepCount !== 1) throw new Error("Confined recovery requires exactly one child.");
 	const requestedIndex = params.index;
 	if (requestedIndex !== undefined && !Number.isInteger(requestedIndex)) throw new Error(`Async run '${runId}' index must be an integer.`);
 	const terminalStepStatuses = new Set(["complete", "completed", "failed", "paused"]);
@@ -568,24 +584,26 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 	if (selectedStatusStep?.status === "stopped" || selectedStatusStep?.stopped === true) {
 		throw new Error(`Async run '${runId}' child ${index} was stopped and cannot be resumed. Start a new run instead.`);
 	}
-	const agent = selectedStatusStep?.agent ?? resultSteps[index]?.agent ?? result?.agent;
+	const agent = environmentBinding ? "$task" : selectedStatusStep?.agent ?? resultSteps[index]?.agent ?? result?.agent;
 	if (!agent) throw new Error(`Could not determine child agent for async run '${runId}'.`);
 	if (recoveryDescriptor && recoveryDescriptor.agent !== agent) throw new Error(`Async run '${runId}' has a recovery descriptor for '${recoveryDescriptor.agent}', not '${agent}'.`);
 	const sessionFile = statusSteps[index]?.sessionFile
 		?? resultSteps[index]?.sessionFile
 		?? (stepCount === 1 ? status?.sessionFile ?? result?.sessionFile : undefined);
 	if (!sessionFile && requireSessionFile) throw new Error(`Async run '${runId}' child ${index} does not have a persisted session file to resume from.`);
-	const resolvedSessionFile = sessionFile ? validateResumeSessionFile(runId, sessionFile) : undefined;
-	const stepModel = statusSteps[index]?.model ?? resultSteps[index]?.model ?? (stepCount === 1 ? result?.model : undefined);
-	const stepThinking = statusSteps[index]?.thinking ?? resultSteps[index]?.thinking ?? (stepCount === 1 ? result?.thinking : undefined);
-	const thinkingCeiling = statusSteps[index]?.thinkingCeiling ?? (stepCount === 1 ? recoveryDescriptor?.thinkingCeiling : undefined);
-	const capabilityCeiling = mode === "workflow"
-		? intersectSubagentCapabilityCeilings(status?.admissionCapabilityCeiling, result?.admissionCapabilityCeiling)
-		: intersectSubagentCapabilityCeilings(status?.capabilityCeiling, statusSteps[index]?.capabilityCeiling, result?.capabilityCeiling, resultSteps[index]?.capabilityCeiling);
-	const managedWorktreeCwd = location.asyncDir
+	const resolvedSessionFile = sessionFile ? environmentBinding ? admitEnvironmentSession(environmentBinding, sessionFile) : validateResumeSessionFile(runId, sessionFile) : undefined;
+	const stepModel = environmentBinding ? recoveryDescriptor?.model : statusSteps[index]?.model ?? resultSteps[index]?.model ?? (stepCount === 1 ? result?.model : undefined);
+	const stepThinking = environmentBinding ? recoveryDescriptor?.thinking : statusSteps[index]?.thinking ?? resultSteps[index]?.thinking ?? (stepCount === 1 ? result?.thinking : undefined);
+	const thinkingCeiling = environmentBinding ? recoveryDescriptor?.thinkingCeiling : statusSteps[index]?.thinkingCeiling ?? (stepCount === 1 ? recoveryDescriptor?.thinkingCeiling : undefined);
+	const capabilityCeiling = environmentBinding
+		? recoveryDescriptor?.capabilityCeiling
+		: mode === "workflow"
+			? intersectSubagentCapabilityCeilings(status?.admissionCapabilityCeiling, result?.admissionCapabilityCeiling)
+			: intersectSubagentCapabilityCeilings(status?.capabilityCeiling, statusSteps[index]?.capabilityCeiling, result?.capabilityCeiling, resultSteps[index]?.capabilityCeiling);
+	const managedWorktreeCwd = !environmentBinding && location.asyncDir
 		? resolveRetainedWorktreeCwd(parallelHandoffPath(location.asyncDir), runId, index)
 		: undefined;
-	const resumeCwd = validateResumeCwd(runId, managedWorktreeCwd ?? status?.cwd ?? result?.cwd ?? recoveryDescriptor?.cwd);
+	const resumeCwd = validateResumeCwd(runId, environmentBinding ? recoveryDescriptor?.cwd : managedWorktreeCwd ?? status?.cwd ?? result?.cwd ?? recoveryDescriptor?.cwd);
 
 	return {
 		kind: "revive",
@@ -602,8 +620,8 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 		...(stepModel ? { model: stepModel } : {}),
 		...(stepThinking ? { thinking: stepThinking } : {}),
 		launchContractDigest: statusSteps[index]?.launchContractDigest ?? resultSteps[index]?.launchContractDigest ?? result?.launchContractDigest ?? recoveryDescriptor?.launchContractDigest,
-		...(statusSteps[index]?.runner ? { runner: statusSteps[index]!.runner } : {}),
-		...(statusSteps[index]?.externalJob ? { externalJob: statusSteps[index]!.externalJob } : {}),
+		...(!environmentBinding && statusSteps[index]?.runner ? { runner: statusSteps[index]!.runner } : {}),
+		...(!environmentBinding && statusSteps[index]?.externalJob ? { externalJob: statusSteps[index]!.externalJob } : {}),
 		...(capabilityCeiling ? { capabilityCeiling } : {}),
 		...(thinkingCeiling ? { thinkingCeiling } : {}),
 		...(recoveryDescriptor ? { recoveryDescriptor } : {}),
@@ -613,6 +631,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 export function applySteeringRecoveryAgentConfig(agentConfig: AgentConfig, descriptor: SteeringRecoveryDescriptor): AgentConfig {
 	return {
 		...agentConfig,
+		...(descriptor.executionEnvironment ? { executionEnvironment: descriptor.executionEnvironment } : {}),
 		model: descriptor.model,
 		modelProvider: descriptor.modelProvider,
 		thinking: descriptor.thinking,

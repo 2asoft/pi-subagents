@@ -11,6 +11,7 @@ import {
 } from "../../shared/types.ts";
 import { canonicalSessionId, inspectSessionLease } from "../shared/session-lease.ts";
 import { releaseActiveRunIndex } from "./active-run-index.ts";
+import { readEnvironmentBinding, environmentAuthorityDirectory, readEnvironmentFile, appendRunEvent } from "./environment-authority.ts";
 import { isRecord, validProcessInstance, readProcessTerminalCandidate, writeProcessTerminalCandidate, type ProcessTerminalCandidate } from "./process-terminal-candidate.ts";
 export { processTerminalCandidatePath, readProcessTerminalCandidate, writeProcessTerminalCandidate, markProcessTerminalCandidateLeaseRelease } from "./process-terminal-candidate.ts";
 export type { ProcessTerminalCandidate } from "./process-terminal-candidate.ts";
@@ -23,7 +24,7 @@ export interface RunnerCloseObservation {
 }
 
 export function processTerminalPath(asyncDir: string): string {
-	return path.join(asyncDir, "process-terminal.json");
+	return path.join(readEnvironmentBinding(asyncDir) ? environmentAuthorityDirectory(asyncDir) : asyncDir, "process-terminal.json");
 }
 
 function errorMessage(error: unknown): string {
@@ -133,7 +134,7 @@ function stepProcessTerminalProof(
 function overlayStatus(asyncDir: string, proof: ProcessTerminal, candidate?: ProcessTerminalCandidate): void {
 	const statusPath = path.join(asyncDir, "status.json");
 	try {
-		const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as AsyncStatus;
+		const status = JSON.parse(readEnvironmentBinding(asyncDir) ? readEnvironmentFile(statusPath) : fs.readFileSync(statusPath, "utf-8")) as AsyncStatus;
 		status.processTerminal = proof;
 		if (status.steps) {
 			for (const [index, step] of status.steps.entries()) {
@@ -157,7 +158,7 @@ export function finalizeProcessTerminal(
 	const existing = readProcessTerminal(asyncDir, { runId, runnerProcessInstanceId: runnerClose.processInstanceId });
 	if (existing && fs.existsSync(processTerminalPath(asyncDir))) {
 		if (existing.state === "observed" && existing.runId === runId && existing.runnerProcessInstanceId === runnerClose.processInstanceId) return existing;
-		if (existing.state === "unknown") {
+		if (existing.state === "unknown" && (!readEnvironmentBinding(asyncDir) || existing.runId !== runId || existing.runnerProcessInstanceId !== runnerClose.processInstanceId)) {
 			// A sticky runner-published unknown proof keeps its reason; only add the observed exit. Unreadable or mismatched sidecars read back as proof-write-failed and stay untouched.
 			if (existing.instances?.length || existing.reason === "proof-write-failed") return existing;
 			const withExit: ProcessTerminal = { ...existing, instances: [{ kind: "runner", ...runnerClose }] };
@@ -179,7 +180,7 @@ export function finalizeProcessTerminal(
 		else {
 			const allWriters = Object.values(candidate.writers).flat();
 			const status = (() => {
-				try { return JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatus; } catch { return undefined; }
+				try { return JSON.parse(readEnvironmentBinding(asyncDir) ? readEnvironmentFile(path.join(asyncDir, "status.json")) : fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatus; } catch { return undefined; }
 			})();
 			const session = candidate.sessionFile ? inspectSessionLease(candidate.sessionFile) : undefined;
 			const writerEntries = Object.entries(candidate.writers);
@@ -223,7 +224,8 @@ export function finalizeProcessTerminal(
 		durable = true;
 		if (proof.state === "observed") releaseActiveRunIndex(asyncDir);
 		overlayStatus(asyncDir, proof, candidateForOverlay);
-		fs.appendFileSync(path.join(asyncDir, "events.jsonl"), `${JSON.stringify({ type: "subagent.run.process_terminal", lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, ts: Date.now(), runId, processTerminal: proof })}\n`, "utf-8");
+		const event = `${JSON.stringify({ type: "subagent.run.process_terminal", lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, ts: Date.now(), runId, processTerminal: proof })}\n`;
+		appendRunEvent(asyncDir, event);
 	} catch {
 		// Do not emit a process-terminal event when the proof sidecar was not durable.
 	}

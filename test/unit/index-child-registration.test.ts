@@ -1378,6 +1378,8 @@ describe("subagent extension child mode", () => {
 			import registerSubagentExtension from "./index.ts";
 			import { SUBAGENT_CHILD_ENV } from "./src/runs/shared/child-runtime-config.ts";
 			process.env[SUBAGENT_CHILD_ENV] = "1";
+			const apiKey = Symbol.for("pi-subagents.execution-environment-api.v1");
+			const priorAPI = Reflect.get(globalThis, apiKey);
 			const calls = [];
 			const fakePi = new Proxy({}, {
 				get(target, prop) {
@@ -1389,6 +1391,7 @@ describe("subagent extension child mode", () => {
 				},
 			});
 			registerSubagentExtension(fakePi);
+			if (Reflect.get(globalThis, apiKey) !== priorAPI) throw new Error("Child mode changed the parent registration API.");
 			if (calls.length > 0) {
 				throw new Error("Unexpected child-mode registrations: " + calls.join(", "));
 			}

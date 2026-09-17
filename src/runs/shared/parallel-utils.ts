@@ -1,6 +1,7 @@
 export type ResolvedRunnerConfig = import("../../shared/types.ts").AgentRunnerConfig;
 
 export interface RunnerSubagentStep {
+	environmentContext?: import("../../shared/execution-environments.ts").AdmittedEnvironmentContext;
 	/** Session id of the direct parent session for permission-system ask forwarding. */
 	parentSessionId?: string;
 	/** Resolved opt-in rules for native Pi child tool calls. */

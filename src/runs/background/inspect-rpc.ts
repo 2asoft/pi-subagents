@@ -378,7 +378,7 @@ export function buildInspectReply(request: InspectRequest, deps: InspectDeps = {
 		let messages: InspectReplyMessage[] | undefined;
 		let task: string | undefined;
 		if (sessionFile && (trustedRoots.length > 0 || deps.state?.trustedSessionFileRoot)) {
-			const tail = readSessionMessagesTail(sessionFile, lineLimit, trustedRoots, [sessionFile], deps.state?.trustedSessionFileRoot);
+			const tail = readSessionMessagesTail(sessionFile, lineLimit, trustedRoots, [sessionFile], deps.state?.trustedSessionFileRoot, node.asyncDir);
 			if (tail.messages.length > 0) {
 				messages = tail.messages.map(toReplyMessage);
 				// The delegated task is the child session's first user message, but

@@ -133,6 +133,8 @@ export interface AgentModelSourceInfo {
 }
 
 export interface AgentConfig {
+	/** Direct native environment selection; never discovered from a named profile. */
+	executionEnvironment?: string;
 	name: string;
 	runner?: AgentRunnerConfig;
 	localName?: string;
