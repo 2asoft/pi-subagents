@@ -8,7 +8,19 @@
 
 <https://github.com/user-attachments/assets/702554ec-faaf-4635-80aa-fb5d6e292fd1>
 
+## Local fork
+
+This checkout adds [direct task delegation](docs/direct-delegation.md). Omit `agent` and supply the exact skill task, model, tools, and required context. Named profiles remain available explicitly.
+
+Load this checkout for a session:
+
+```bash
+pi -e /absolute/path/to/pi-subagents/index.ts
+```
+
 ## Install
+
+The following command installs the upstream package.
 
 ```bash
 pi install npm:pi-subagents

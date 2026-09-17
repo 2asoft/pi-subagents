@@ -1440,6 +1440,8 @@ export interface AgentCapabilityRow {
 export interface Details {
 	commands?: import("../runs/shared/child-commands.ts").ChildCommandSnapshot[];
 	mode: SubagentResultMode | "management";
+	/** Execution completed, but its direct task configuration could not be retained. */
+	resumeWarning?: string;
 	workflowReceiptPath?: string;
 	runId?: string;
 	/** Host tool-call id retained when it differs from the internal run id. */
@@ -2166,6 +2168,7 @@ export interface ForegroundResumeChild {
 	agentContract?: AgentContract;
 	/** Private bounded launch fields needed to preserve the child contract on resume. */
 	resumeContract?: {
+		directTaskPath?: string;
 		modelResponseAliases?: Record<string, string[]>;
 		outputSchema?: JsonSchemaObject | false;
 		agentContract?: AgentContract;

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { DIRS, type AcceptanceInput, type AsyncStatus, type SteeringRecoveryDescriptor, type SubagentRunMode } from "../../shared/types.ts";
 import type { AgentConfig } from "../../agents/agents.ts";
+import { DIRECT_TASK_AGENT } from "../../agents/direct-task.ts";
 import { normalizeExtensionBindings } from "../shared/extension-bindings.ts";
 import { snapshotRequiredChildExtensions } from "../../shared/required-child-extensions.ts";
 import { normalizeWorkflowLaneMetadata } from "../shared/lane-metadata.ts";
@@ -640,6 +641,7 @@ export function applySteeringRecoveryAgentConfig(agentConfig: AgentConfig, descr
 }
 
 export function buildRevivedAsyncTask(target: AsyncResumeTarget, message: string): string {
+	if (target.agent === DIRECT_TASK_AGENT) return message;
 	return [
 		"You are reviving a previous subagent conversation.",
 		"",

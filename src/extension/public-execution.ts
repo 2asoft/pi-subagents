@@ -1,6 +1,7 @@
+import { DIRECT_TASK_AGENT, hasDirectTaskOptions, parseDirectTaskOptions, type DirectTaskInput } from "../agents/direct-task.ts";
 import { normalizeWorktreeBaseRef } from "../runs/shared/worktree.ts";
 
-export interface PublicSubagentExecutionParams {
+export interface PublicSubagentExecutionParams extends DirectTaskInput {
 	action?: unknown;
 	capabilities?: unknown;
 	mode?: unknown;
@@ -194,6 +195,7 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 		return { ok: true, params };
 	}
 	if (normalizedAction !== undefined) {
+		if (hasDirectTaskOptions(params) && !hasWorkflowInput) return { ok: false, error: "Direct task options apply to fresh execution; resume uses the retained execution configuration.", mode: "management" };
 		const legacyAction = normalizedAction.toLowerCase();
 		if (legacyAction === "append-step") {
 			return { ok: false, error: "Legacy append-step control was removed from the public subagent tool; use workflow script orchestration.", mode: "management" };
@@ -240,6 +242,15 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 		return { ok: false, error: "Structured single-child execution cannot be combined with workflow.", mode: "workflow" };
 	}
 	if (params.agent !== undefined || params.task !== undefined) {
+		const directOptions = parseDirectTaskOptions(params);
+		if (!directOptions.ok) return { ok: false, error: directOptions.error, mode: "workflow" };
+		if (params.agent === DIRECT_TASK_AGENT || (params.agent !== undefined && hasDirectTaskOptions(params))) {
+			return { ok: false, error: "Direct task options require omitting agent; named profiles supply their own execution configuration.", mode: "workflow" };
+		}
+		if (params.agent === undefined) {
+			if (typeof params.task !== "string" || !params.task.trim()) return { ok: false, error: "Direct execution requires a non-empty task.", mode: "workflow" };
+			return { ok: true, params: { ...params, output: params.output ?? false } };
+		}
 		if (typeof params.agent !== "string" || !params.agent.trim()) {
 			return { ok: false, error: "Structured single-child execution requires agent to be a non-empty string.", mode: "workflow" };
 		}
@@ -256,7 +267,7 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 		};
 	}
 	if (!hasValidWorkflowInput) {
-		return { ok: false, error: "Execution requires either { agent, task? } for one child or workflow (true, a script path, or a named workflow resource) for orchestration.", mode: "workflow" };
+		return { ok: false, error: "Execution requires { task } for a direct child, { agent, task? } for a named profile, or workflow (true, a script path, or a named workflow resource) for orchestration.", mode: "workflow" };
 	}
 	return { ok: true, params };
 }
