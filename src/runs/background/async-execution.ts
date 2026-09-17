@@ -96,6 +96,11 @@ import { omitGitRoutingEnv } from "../shared/git-environment.ts";
 import { assertWorkflowLaneKey, normalizeWorkflowLaneMetadata } from "../shared/lane-metadata.ts";
 import { assertRequiredChildExtensionsAdmitted, resolveRequiredChildExtensions, writeRetainedRequiredChildExtensions, type RequiredChildExtensionSnapshot } from "../../shared/required-child-extensions.ts";
 
+import type { SubagentRunConfig } from "./subagent-runner.ts";
+import { prepareEnvironmentBootstrap } from "./environment-bootstrap.ts";
+import { environmentProcessState, readEnvironmentOwner } from "./environment-process-identity.ts";
+import { requestAsyncStop } from "./control-channel.ts";
+
 const require = nodeModule.createRequire(import.meta.url);
 // Cache failures as well as roots: management must remain loadable, and launches must not retry another SDK.
 const piPackageSelection = ((): { root?: string } | { error: unknown; root?: never } => {
@@ -664,7 +669,7 @@ export function emitProcessTerminalEvent(ctx: AsyncExecutionContext, proof: unkn
 	}
 }
 
-function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Omit<AsyncStatus, "pid" | "processTerminal">, initialStatusPath: string, launchParentSessionId: string | undefined, onProcessTerminal?: (proof: unknown) => void, onBeforeProceed?: (runnerProcessInstanceId: string) => void, requestedCwd = cwd): SpawnRunnerResult | Promise<SpawnRunnerResult> {
+function spawnRunner(cfg: SubagentRunConfig, suffix: string, cwd: string, initialStatus: Omit<AsyncStatus, "pid" | "processTerminal">, initialStatusPath: string, launchParentSessionId: string | undefined, onProcessTerminal?: (proof: unknown) => void, onBeforeProceed?: (runnerProcessInstanceId: string) => void, requestedCwd = cwd): SpawnRunnerResult | Promise<SpawnRunnerResult> {
 	const cwdError = preflightLaunchCwd(requestedCwd, cwd);
 	if (cwdError) return { error: cwdError };
 	if (launchParentSessionId !== undefined && (!launchParentSessionId || launchParentSessionId.trim() !== launchParentSessionId)) {
@@ -676,6 +681,8 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 		? step.parallel.some((child) => child.parentSessionId !== launchParentSessionId)
 		: (isDynamicRunnerGroup(step) ? step.parallel.parentSessionId : step.parentSessionId) !== launchParentSessionId);
 	if (inconsistentParent) return { error: "Background runner steps have inconsistent parent session identities." };
+	const environment = cfg.executionEnvironment ? prepareEnvironmentBootstrap(cfg) : undefined;
+	cfg = environment?.config ?? cfg;
 
 	// The compiled host exposes its SDK only through Pi's extension loader.
 	const binaryHost = resolveBunPiExecutable();
@@ -700,7 +707,7 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 	}
 
 	fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true });
-	const cfgPath = getAsyncConfigPath(suffix);
+	const cfgPath = environment?.bootstrapPath ?? getAsyncConfigPath(suffix);
 	const runnerProcessInstanceId = randomUUID();
 	const hasRevivalLease = typeof (cfg as { revivalLease?: unknown }).revivalLease === "object";
 	const launchBarrierToken = hasRevivalLease ? undefined : runnerProcessInstanceId;
@@ -729,11 +736,14 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 	if (startupAckPath) fs.rmSync(startupAckPath, { force: true });
 	if (startupConfirmPath) fs.rmSync(startupConfirmPath, { force: true });
 	if (startupProceedPath) fs.rmSync(startupProceedPath, { force: true });
+	if (environment && launcher) return { error: "Execution environments cannot use runner launchers." };
 	const identityPath = launcher && launchBarrierToken && launchAsyncDir ? path.join(launchAsyncDir, "runner-startup.json") : undefined;
 	if (identityPath) fs.rmSync(identityPath, { force: true });
 	let runnerIdentity: { pid: number; pidNamespaceScope?: string } | undefined;
 	// Wrapper exit is not runner exit, so only a reported runner in this namespace may be signalled.
-	const terminateBeforeProceed = (pid: number): boolean => !launcher
+	const terminateBeforeProceed = (pid: number): boolean => environment
+		? (requestAsyncStop(cfg.asyncDir), false)
+		: !launcher
 		? terminateRunnerBeforeProceed(pid)
 		: runnerIdentity !== undefined && runnerIdentity.pidNamespaceScope === currentPidNamespaceScope() && terminateRunnerBeforeProceed(runnerIdentity.pid);
 	const adoptRunnerIdentity = (pid: unknown, pidNamespaceScope: unknown): string | undefined => {
@@ -769,7 +779,7 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 				? [...preload, "--experimental-strip-types", runner, cfgPath]
 				: [...preload, jitiCliPath!, runner, cfgPath];
 		const runnerEnv: NodeJS.ProcessEnv = {
-			...omitGitRoutingEnv(omitExtensionBindingsEnv(process.env)),
+			...(environment ? {} : omitGitRoutingEnv(omitExtensionBindingsEnv(process.env))),
 			...childCacheRetentionEnv(),
 			[PI_CODING_AGENT_PACKAGE_ROOT_ENV]: binaryHost ? undefined : piPackageRoot,
 			// npm must override inherited bundled layouts (#2071); binaries retain release assets.
@@ -777,16 +787,19 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 			[JITI_ALIAS_ENV]: binaryHost ? undefined : JSON.stringify(hostPeerAliases.aliases),
 			PI_ASYNC_NATIVE_RUNNER: !binaryHost && (runnerIsJavaScript || nativeRunnerSupported) ? "1" : "0",
 			PI_SUBAGENT_RUNNER_CONFIG: binaryHost ? cfgPath : undefined,
+			...(environment ? { PI_SUBAGENTS_TEMP_ROOT: TEMP_ROOT_DIR } : {}),
 		};
 		if (launchParentSessionId === undefined) delete runnerEnv[SUBAGENT_PARENT_SESSION_ENV];
 		else runnerEnv[SUBAGENT_PARENT_SESSION_ENV] = launchParentSessionId;
+		const ownerExecutable = environment ? fs.realpathSync("/usr/bin/node") : nodeExecutable;
+		const environmentArgs = environment?.wrap({ executable: command, args, cwd, env: Object.fromEntries(Object.entries(runnerEnv).filter((entry): entry is [string, string] => typeof entry[1] === "string")) }, ownerExecutable);
+		const ownerPath = path.join(path.dirname(runner), `environment-launcher${path.extname(runner)}`);
 		const [spawnCommand, ...spawnArgs] = launcher ? [...launcher.argv, command, ...args] : [command, ...args];
-		const proc = spawn(spawnCommand!, spawnArgs, {
-			cwd,
-			...backgroundProcessOptions(),
-			stdio: ["ignore", stdoutFd ?? "ignore", stderrFd ?? "ignore"],
-			env: runnerEnv,
+		const proc = spawn(environment ? ownerExecutable : spawnCommand!, environment ? [...(ownerPath.endsWith(".ts") ? ["--experimental-strip-types"] : []), ownerPath] : spawnArgs, {
+			cwd, ...backgroundProcessOptions(), stdio: [environment ? "pipe" : "ignore", stdoutFd ?? "ignore", stderrFd ?? "ignore"],
+			env: environment ? { PATH: process.env.PATH, PI_SUBAGENTS_TEMP_ROOT: TEMP_ROOT_DIR } : runnerEnv,
 		});
+		if (environment) proc.stdin?.end(JSON.stringify({ runDirectory: cfg.asyncDir, bootstrapPath: cfgPath, runnerProcessInstanceId, args: environmentArgs, cwd, deadlineAt: cfg.deadlineAt, resultDestination: environment.resultDestination }));
 		let observedProcessExit: { exitCode: number | null; signal: NodeJS.Signals | null } | undefined;
 		proc.once("exit", (exitCode, signal) => { observedProcessExit = { exitCode, signal }; });
 		const processClosed = new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>((resolve) => {
@@ -899,44 +912,67 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 			const terminationObserved = terminateBeforeProceed(proc.pid);
 			return { pid: proc.pid, runnerProcessInstanceId, error: message, terminationObserved, startupDidNotProceed: true };
 		}
-		if (identityPath && launchBarrierToken && startupProceedPath) {
-			proc.unref();
-			const fail = (message: string): SpawnRunnerResult => {
-				if (launchAsyncDir) persistPreProceedStartupFailure(launchAsyncDir, launchRunId, runnerProcessInstanceId, launchSessionId, launchCompletionOwnerId, message);
-				return { ...(runnerIdentity ? { pid: runnerIdentity.pid } : {}), runnerProcessInstanceId, error: message, terminationObserved: terminateBeforeProceed(proc.pid!), startupDidNotProceed: true };
-			};
-			return waitForRunnerStartup(identityPath, "identified", RUNNER_STARTUP_TIMEOUT_MS, launchBarrierToken, processClosed).then((identified) => {
-				if (identified.ok === false) return fail(identified.error);
-				const identityError = adoptRunnerIdentity(identified.pid, identified.pidNamespaceScope);
-				if (identityError) return fail(identityError);
+		const proceed = (): SpawnRunnerResult | Promise<SpawnRunnerResult> => {
+			if (identityPath && launchBarrierToken && startupProceedPath) {
+				proc.unref();
+				const fail = (message: string): SpawnRunnerResult => {
+					if (launchAsyncDir) persistPreProceedStartupFailure(launchAsyncDir, launchRunId, runnerProcessInstanceId, launchSessionId, launchCompletionOwnerId, message);
+					return { ...(runnerIdentity ? { pid: runnerIdentity.pid } : {}), runnerProcessInstanceId, error: message, terminationObserved: terminateBeforeProceed(proc.pid!), startupDidNotProceed: true };
+				};
+				return waitForRunnerStartup(identityPath, "identified", RUNNER_STARTUP_TIMEOUT_MS, launchBarrierToken, processClosed).then((identified) => {
+					if (identified.ok === false) return fail(identified.error);
+					const identityError = adoptRunnerIdentity(identified.pid, identified.pidNamespaceScope);
+					if (identityError) return fail(identityError);
+					try {
+						writeRunnerStartupControl(startupProceedPath, { action: "proceed", token: launchBarrierToken });
+					} catch (error) {
+						return fail(`Failed to authorize async runner startup: ${error instanceof Error ? error.message : String(error)}`);
+					}
+					return { pid: identified.pid as number, runnerProcessInstanceId };
+				});
+			}
+			if (launchBarrierToken && startupProceedPath) {
 				try {
 					writeRunnerStartupControl(startupProceedPath, { action: "proceed", token: launchBarrierToken });
 				} catch (error) {
-					return fail(`Failed to authorize async runner startup: ${error instanceof Error ? error.message : String(error)}`);
+					const message = `Failed to authorize async runner startup: ${error instanceof Error ? error.message : String(error)}`;
+					if (launchAsyncDir) persistPreProceedStartupFailure(launchAsyncDir, launchRunId, runnerProcessInstanceId, launchSessionId, launchCompletionOwnerId, message);
+					const terminationObserved = terminateBeforeProceed(proc.pid!);
+					return { pid: proc.pid, runnerProcessInstanceId, error: message, terminationObserved, startupDidNotProceed: true };
 				}
-				return { pid: identified.pid as number, runnerProcessInstanceId };
-			});
-		}
-		if (launchBarrierToken && startupProceedPath) {
-			try {
-				writeRunnerStartupControl(startupProceedPath, { action: "proceed", token: launchBarrierToken });
-			} catch (error) {
-				const message = `Failed to authorize async runner startup: ${error instanceof Error ? error.message : String(error)}`;
-				if (launchAsyncDir) persistPreProceedStartupFailure(launchAsyncDir, launchRunId, runnerProcessInstanceId, launchSessionId, launchCompletionOwnerId, message);
-				const terminationObserved = terminateBeforeProceed(proc.pid);
-				return { pid: proc.pid, runnerProcessInstanceId, error: message, terminationObserved, startupDidNotProceed: true };
 			}
-		}
-		proc.unref();
-		if (startupPath && startupAckPath && startupConfirmPath && startupProceedPath) {
-			const persistStartupFailure = (message: string) => {
-				if (launchAsyncDir) persistPreProceedStartupFailure(launchAsyncDir, launchRunId, runnerProcessInstanceId, launchSessionId, launchCompletionOwnerId, message);
-			};
-			const handshake = completeRunnerStartupHandshake(startupPath, startupAckPath, startupConfirmPath, startupProceedPath, proc, processClosed, () => observedProcessExit ?? (proc.exitCode !== null || proc.signalCode !== null ? { exitCode: proc.exitCode, signal: proc.signalCode } : undefined), runnerProcessInstanceId, persistStartupFailure, launcher ? { adopt: adoptRunnerIdentity, terminate: () => terminateBeforeProceed(proc.pid!) } : undefined);
-			if (!launcher) return handshake;
-			return handshake.then(({ pid: _wrapperPid, ...result }) => ({ ...result, ...(runnerIdentity ? { pid: runnerIdentity.pid } : {}) }));
-		}
-		return { pid: proc.pid, runnerProcessInstanceId };
+			proc.unref();
+			if (startupPath && startupAckPath && startupConfirmPath && startupProceedPath) {
+				const persistStartupFailure = (message: string) => {
+					if (launchAsyncDir) persistPreProceedStartupFailure(launchAsyncDir, launchRunId, runnerProcessInstanceId, launchSessionId, launchCompletionOwnerId, message);
+				};
+				const handshake = completeRunnerStartupHandshake(startupPath, startupAckPath, startupConfirmPath, startupProceedPath, proc, processClosed, () => observedProcessExit ?? (proc.exitCode !== null || proc.signalCode !== null ? { exitCode: proc.exitCode, signal: proc.signalCode } : undefined), runnerProcessInstanceId, persistStartupFailure, launcher ? { adopt: adoptRunnerIdentity, terminate: () => terminateBeforeProceed(proc.pid!) } : undefined);
+				if (!launcher) return handshake;
+				return handshake.then(({ pid: _wrapperPid, ...result }) => ({ ...result, ...(runnerIdentity ? { pid: runnerIdentity.pid } : {}) }));
+			}
+			return { pid: proc.pid, runnerProcessInstanceId };
+		};
+		if (!environment) return proceed();
+		return (async (): Promise<SpawnRunnerResult> => {
+			try {
+				const deadline = Date.now() + 10_000;
+				while (true) {
+					const owner = readEnvironmentOwner(cfg.asyncDir);
+					if (owner) {
+						if (owner.owner.pid !== proc.pid || owner.runnerProcessInstanceId !== runnerProcessInstanceId || ![owner.owner, owner.monitor, owner.namespace.identity].every(identity => environmentProcessState(identity) === "alive")) throw new Error("Environment ownership acknowledgement is invalid.");
+						return proceed();
+					}
+					if (observedProcessExit) throw new Error("Environment launcher exited before ownership acknowledgement. Inspect runner.stderr.log for the startup failure.");
+					if (Date.now() >= deadline) throw new Error("Environment ownership acknowledgement timed out.");
+					await new Promise(resolve => setTimeout(resolve, 20));
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				persistPreProceedStartupFailure(cfg.asyncDir, cfg.id, runnerProcessInstanceId, launchSessionId, launchCompletionOwnerId, message);
+				requestAsyncStop(cfg.asyncDir);
+				return { error: message, pid: proc.pid, runnerProcessInstanceId, startupDidNotProceed: true };
+			}
+		})();
 	} catch (error) {
 		closeFd(stdoutFd);
 		closeFd(stderrFd);
@@ -2197,6 +2233,9 @@ export function executeAsyncSingle(
 	try {
 		spawnResultOrPromise = spawnRunner(
 			{
+				executionEnvironment: agentConfig.executionEnvironment,
+				environmentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
+				environmentSourceRunId: params.revivalLease?.sourceRunId,
 				id,
 				...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
 				steps: [
@@ -2293,7 +2332,7 @@ export function executeAsyncSingle(
 				deadlineAt,
 				toolTimeoutMs,
 				checkpointBeforeDeadlineMs: params.checkpointBeforeDeadlineMs,
-				toolBudget: params.toolBudget,
+				toolBudget: resolvedToolBudget.budget,
 				usageBudget: params.usageBudget,
 				controlIntercomTarget,
 				childIntercomTargets: childIntercomTarget ? [childIntercomTarget(agent, 0)] : undefined,

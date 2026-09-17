@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { readEnvironmentBinding, withEnvironmentSessionDescriptor } from "./environment-authority.ts";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { safeTerminalText, truncateDisplayText } from "../../shared/display-text.ts";
 import { formatDuration, formatModelThinking, formatTokens, shortenPath } from "../../shared/formatters.ts";
@@ -106,22 +107,22 @@ function isNotFoundError(error: unknown): boolean {
 		&& (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
-function readTextTail(filePath: string, maxLines: number): TextTailResult {
+function readTextTail(filePath: string, maxLines: number, admittedDescriptor?: number): TextTailResult {
 	let stat: fs.Stats;
 	try {
-		stat = fs.statSync(filePath);
+		stat = admittedDescriptor === undefined ? fs.statSync(filePath) : fs.fstatSync(admittedDescriptor);
 	} catch (error) {
 		if (isNotFoundError(error)) return { path: filePath, lines: [], truncated: false };
 		return { path: filePath, lines: [], truncated: false, error: getErrorMessage(error) };
 	}
 	if (stat.size === 0) return { path: filePath, lines: [], truncated: false };
 
-	let fd: number | undefined;
+	let fd = admittedDescriptor;
 	try {
 		const bytesToRead = Math.min(stat.size, TRANSCRIPT_TAIL_BYTES);
 		const start = stat.size - bytesToRead;
 		const buffer = Buffer.alloc(bytesToRead);
-		fd = fs.openSync(filePath, "r");
+		fd ??= fs.openSync(filePath, "r");
 		const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, start);
 		const content = buffer.subarray(0, bytesRead).toString("utf-8");
 		let lines = content.split(/\r?\n/);
@@ -131,11 +132,17 @@ function readTextTail(filePath: string, maxLines: number): TextTailResult {
 	} catch (error) {
 		return { path: filePath, lines: [], truncated: false, error: getErrorMessage(error) };
 	} finally {
-		if (fd !== undefined) fs.closeSync(fd);
+		if (fd !== undefined && admittedDescriptor === undefined) fs.closeSync(fd);
 	}
 }
 
-function readContainedTextTail(filePath: string, maxLines: number, trustedRoots: string[], label: string, trustedFiles: string[] = [], trustedFileRoot?: string): TextTailResult {
+function readContainedTextTail(filePath: string, maxLines: number, trustedRoots: string[], label: string, trustedFiles: string[] = [], trustedFileRoot?: string, environmentDirectory?: string): TextTailResult {
+	if (environmentDirectory) {
+		try {
+			const binding = readEnvironmentBinding(environmentDirectory);
+			if (binding) return withEnvironmentSessionDescriptor(binding, filePath, descriptor => readTextTail(filePath, maxLines, descriptor));
+		} catch (error) { return { path: filePath, lines: [], truncated: false, error: getErrorMessage(error) }; }
+	}
 	if (trustedRoots.length === 0 && (!trustedFileRoot || trustedFiles.length === 0)) return { path: filePath, lines: [], truncated: false, error: `Refusing to read ${label} transcript path without a trusted root: ${filePath}` };
 	const resolvedPath = path.resolve(filePath);
 	const recordedCandidate = trustedFileRoot
@@ -231,8 +238,8 @@ function sessionMessageLine(record: unknown): string | undefined {
 
 /** Structured session tail: parsed content parts, newest last, bounded by
  *  maxMessages. Same trusted-root containment as the prose transcript tail. */
-export function readSessionMessagesTail(sessionFile: string, maxMessages: number, trustedRoots: string[], trustedFiles: string[] = [], trustedFileRoot?: string): { messages: SessionTranscriptMessage[]; warnings: string[]; truncated: boolean } {
-	const tail = readContainedTextTail(sessionFile, Math.max(maxMessages * 4, maxMessages), trustedRoots, "session", trustedFiles, trustedFileRoot);
+export function readSessionMessagesTail(sessionFile: string, maxMessages: number, trustedRoots: string[], trustedFiles: string[] = [], trustedFileRoot?: string, environmentDirectory?: string): { messages: SessionTranscriptMessage[]; warnings: string[]; truncated: boolean } {
+	const tail = readContainedTextTail(sessionFile, Math.max(maxMessages * 4, maxMessages), trustedRoots, "session", trustedFiles, trustedFileRoot, environmentDirectory);
 	const warnings: string[] = [];
 	if (tail.error) warnings.push(`Session read failed for ${sessionFile}: ${tail.error}`);
 	const parsedMessages: SessionTranscriptMessage[] = [];
@@ -253,8 +260,8 @@ export function readSessionMessagesTail(sessionFile: string, maxMessages: number
 	return { messages, warnings, truncated: tail.truncated || parsedMessages.length > messages.length };
 }
 
-function readSessionTranscriptTail(sessionFile: string, maxLines: number, trustedRoots: string[], trustedFiles: string[] = [], trustedFileRoot?: string): { lines: string[]; warnings: string[] } {
-	const tail = readContainedTextTail(sessionFile, Math.max(maxLines * 4, maxLines), trustedRoots, "session", trustedFiles, trustedFileRoot);
+function readSessionTranscriptTail(sessionFile: string, maxLines: number, trustedRoots: string[], trustedFiles: string[] = [], trustedFileRoot?: string, environmentDirectory?: string): { lines: string[]; warnings: string[] } {
+	const tail = readContainedTextTail(sessionFile, Math.max(maxLines * 4, maxLines), trustedRoots, "session", trustedFiles, trustedFileRoot, environmentDirectory);
 	const warnings: string[] = [];
 	if (tail.error) warnings.push(`Session read failed for ${sessionFile}: ${tail.error}`);
 	const lines: string[] = [];
@@ -611,7 +618,7 @@ export function formatAsyncRunTranscript(status: AsyncStatus, asyncDir: string, 
 		transcriptSource = "Recent output from status.json";
 	}
 	if (transcriptLines.length === 0 && sessionFile) {
-		const sessionTail = readSessionTranscriptTail(sessionFile, lineLimit, options.sessionRoots ?? [], options.trustedSessionFiles, options.trustedSessionFileRoot);
+		const sessionTail = readSessionTranscriptTail(sessionFile, lineLimit, options.sessionRoots ?? [], options.trustedSessionFiles, options.trustedSessionFileRoot, asyncDir);
 		transcriptLines = sessionTail.lines;
 		warnings.push(...sessionTail.warnings);
 		if (transcriptLines.length > 0) transcriptSource = `Session transcript tail from ${sessionFile}`;
@@ -642,7 +649,7 @@ export function formatNestedRunTranscript(run: NestedRunSummary, options: Transc
 		appendTranscriptBody(lines, "Transcript tail", [], false);
 		return safeTranscriptLines(lines);
 	}
-	const sessionTail = readSessionTranscriptTail(run.sessionFile, lineLimit, options.sessionRoots ?? [], options.trustedSessionFiles, options.trustedSessionFileRoot);
+	const sessionTail = readSessionTranscriptTail(run.sessionFile, lineLimit, options.sessionRoots ?? [], options.trustedSessionFiles, options.trustedSessionFileRoot, run.asyncDir);
 	if (sessionTail.warnings.length) {
 		lines.push("Warnings:");
 		for (const warning of sessionTail.warnings) lines.push(`  ${warning}`);

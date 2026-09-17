@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import type { ProcessInstanceExit } from "../../shared/types.ts";
+import { readEnvironmentBinding, environmentAuthorityDirectory } from "./environment-authority.ts";
 
 export interface ProcessTerminalCandidate {
 	version: 1;
@@ -28,6 +29,7 @@ export function validProcessInstance(value: unknown, kind?: "runner" | "pi-write
 	if (value.kind === "runner") return value.attempt === undefined;
 	if (typeof value.attempt !== "number" || !Number.isInteger(value.attempt) || value.attempt < 0 || !isRecord(value.processTree)) return false;
 	if (value.processTree.state === "observed") {
+		if (value.processTree.mechanism === "linux-pid-namespace") return typeof value.processTree.namespaceId === "number" && Number.isSafeInteger(value.processTree.namespaceId) && value.processTree.namespaceId > 0 && typeof value.processTree.verifiedAt === "number" && Number.isFinite(value.processTree.verifiedAt);
 		return value.processTree.mechanism === "posix-process-group"
 			&& typeof value.processTree.processGroupId === "number"
 			&& Number.isInteger(value.processTree.processGroupId)
@@ -45,7 +47,7 @@ function validInstance(value: unknown): value is ProcessInstanceExit {
 }
 
 export function processTerminalCandidatePath(asyncDir: string): string {
-	return path.join(asyncDir, "process-terminal-candidate.json");
+	return path.join(readEnvironmentBinding(asyncDir) ? environmentAuthorityDirectory(asyncDir) : asyncDir, "process-terminal-candidate.json");
 }
 
 export function readProcessTerminalCandidate(asyncDir: string): ProcessTerminalCandidate | undefined {

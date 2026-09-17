@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { publishExecutionEnvironmentAPI } from "../shared/execution-environments.ts";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text, type Component } from "@earendil-works/pi-tui";
@@ -286,6 +287,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	if (process.env[SUBAGENT_CHILD_ENV] === "1") {
 		return;
 	}
+	const withdrawEnvironmentAPI = publishExecutionEnvironmentAPI();
+	pi.on("session_shutdown", () => { withdrawEnvironmentAPI(); });
 	const runtimeRegistry = getRuntimeRegistry();
 	setMainThinkingLevelSource(() => readMainThinkingLevel(() => pi.getThinkingLevel()));
 
