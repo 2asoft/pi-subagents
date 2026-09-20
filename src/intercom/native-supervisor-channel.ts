@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import type { ChildSupervisorMetadata } from "../runs/shared/child-runtime-config.ts";
 import { INTERCOM_DETACH_REQUEST_EVENT, POLL_INTERVAL_MS, TEMP_ROOT_DIR, type ControlEvent, type IntercomEventBus, type SubagentState } from "../shared/types.ts";
 import { writeAtomicJson } from "../shared/atomic-json.ts";
+import { readProcessTerminal } from "../runs/background/process-terminal.ts";
 import { shouldUseNativeFsWatch } from "../shared/watch-strategy.ts";
 import {
 	SUPERVISOR_REQUEST_MESSAGE_TYPE,
@@ -369,25 +370,34 @@ function removeStaleEmptySupervisorChannel(channelDir: string, nowMs: number, pl
 	return true;
 }
 
-function cleanupStaleEmptySupervisorChannels(nowMs = Date.now(), platform: NodeJS.Platform = process.platform): number {
-	let channelEntries: fs.Dirent[];
-	try {
-		channelEntries = fs.readdirSync(SUPERVISOR_CHANNEL_ROOT, { withFileTypes: true });
-	} catch (error) {
-		if (isMissingSupervisorDirectory(error, platform)) return 0;
-		throw error;
-	}
-
-	let removed = 0;
-	for (const entry of channelEntries) {
-		if (!entry.isDirectory()) continue;
-		try {
-			if (removeStaleEmptySupervisorChannel(path.join(SUPERVISOR_CHANNEL_ROOT, entry.name), nowMs, platform)) removed++;
-		} catch {
-			// Cleanup is opportunistic; active writers can race with us and will be picked up by a later pass.
+function cleanupStaleEmptySupervisorChannels(states: Iterable<SubagentState>, nowMs: number, platform: NodeJS.Platform): void {
+	// Age is not liveness: unlinking an exact bind-mount source strands the
+	// child's directory inode. Only the owner may retire a known terminal channel.
+	const dirs = new Set<string>();
+	for (const state of states) {
+		for (const run of state.foregroundRuns?.values() ?? []) {
+			if (state.foregroundControls.has(run.runId)) continue;
+			for (const child of run.children) {
+				if (child.status === "detached" || child.status === "running") continue;
+				dirs.add(resolveSupervisorChannelDir(run.runId, child.agent, child.index));
+			}
+		}
+		for (const job of state.asyncJobs.values()) {
+			if (job.status === "queued" || job.status === "running") continue;
+			const proof = readProcessTerminal(job.asyncDir, { runId: job.asyncId });
+			if (proof?.state !== "observed" && proof?.state !== "not-started") continue;
+			for (const [index, step] of (job.steps ?? []).entries()) {
+				dirs.add(resolveSupervisorChannelDir(job.asyncId, step.agent, step.index ?? index));
+			}
 		}
 	}
-	return removed;
+	for (const dir of dirs) {
+		try {
+			removeStaleEmptySupervisorChannel(dir, nowMs, platform);
+		} catch {
+			// Cleanup is opportunistic; leave uncertain channels intact.
+		}
+	}
 }
 
 function requestMatchesOwner(request: SupervisorRequest, state: Pick<SubagentState, "supervisorOwnerSessionId">): boolean {
@@ -709,12 +719,12 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 	};
 
 	const cleanupStaleChannelsIfDue = (): void => {
-		if (deps.getChannelDirs) return; // The root owns global retention cleanup.
+		if (deps.getChannelDirs) return; // Scoped coordinators do not own retention cleanup.
 		const nowMs = Date.now();
 		if (nowMs - lastStaleCleanupAt < STALE_EMPTY_CHANNEL_CLEANUP_INTERVAL_MS) return;
 		lastStaleCleanupAt = nowMs;
 		try {
-			cleanupStaleEmptySupervisorChannels(nowMs, platform);
+			cleanupStaleEmptySupervisorChannels(new Set([state, ...(deps.getCurrentOwnerStates?.() ?? [])]), nowMs, platform);
 		} catch {
 			// Supervisor delivery must not fail because best-effort temp cleanup failed.
 		}

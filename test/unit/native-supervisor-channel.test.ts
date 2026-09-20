@@ -13,7 +13,9 @@ import {
 	resolveSupervisorChannelDir,
 } from "../../src/intercom/native-supervisor-channel.ts";
 import { SUPERVISOR_REPLY_ENTRY_TYPE, SUPERVISOR_REQUEST_MESSAGE_TYPE } from "../../src/intercom/supervisor-ui.ts";
-import { INTERCOM_DETACH_REQUEST_EVENT, type SubagentState } from "../../src/shared/types.ts";
+import { DIRS, INTERCOM_DETACH_REQUEST_EVENT, type SubagentState } from "../../src/shared/types.ts";
+import { createEnvironmentBinding, environmentAuthorityDirectory } from "../../src/runs/background/environment-authority.ts";
+import { processTerminalPath } from "../../src/runs/background/process-terminal.ts";
 
 const createdChannels: string[] = [];
 
@@ -505,7 +507,85 @@ describe("native supervisor channel", () => {
 		}
 	});
 
-	it("prunes stale empty supervisor channel directories before polling", () => {
+	it("retains aged live and foreign channel inodes, then cleans owned terminal channels", () => {
+		const owner = randomUUID();
+		const runId = randomUUID();
+		const dir = makeEmptyChannel(runId);
+		ageChannel(dir, 120_000);
+		const inode = fs.statSync(dir).ino;
+		const state = makeState(owner, { sessionManager: { getSessionId: () => owner } });
+		state.foregroundRuns = new Map([[runId, {
+			runId, mode: "single", cwd: process.cwd(), updatedAt: 1,
+			children: [{ agent: "worker", index: 0, status: "detached" }],
+		}]]);
+		const sweep = (target: SubagentState) => {
+			const channel = createNativeSupervisorChannel({ getAllTools: () => [], registerTool() {}, sendMessage() {} } as never, target, { platform: "darwin" });
+			try { channel.start(); } finally { channel.dispose(); }
+		};
+		sweep(makeState("foreign", null));
+		assert.equal(fs.existsSync(dir), true, "foreign parent must not unlink a live mount source");
+		sweep(state);
+		assert.equal(fs.statSync(dir).ino, inode, "live mount source retains its inode");
+		state.foregroundRuns.get(runId)!.children[0]!.status = "completed";
+		const reply = path.join(dir, "replies", "reply.json");
+		fs.writeFileSync(reply, "{}");
+		ageChannel(dir, 120_000);
+		sweep(state);
+		assert.equal(fs.existsSync(dir), true, "non-empty terminal channels remain intact");
+		fs.unlinkSync(reply);
+		sweep(state);
+		assert.equal(fs.existsSync(dir), true, "fresh terminal channels retain the age grace");
+		ageChannel(dir, 120_000);
+		sweep(state);
+		assert.equal(fs.existsSync(dir), false);
+	});
+
+	it("requires host process termination before cleaning a confined background channel", () => {
+		const runId = randomUUID();
+		const asyncDir = path.join(DIRS.async, runId);
+		const sessionRoot = path.join(asyncDir, "session");
+		fs.mkdirSync(sessionRoot, { recursive: true });
+		const sessionFile = path.join(sessionRoot, "session.jsonl");
+		fs.writeFileSync(sessionFile, "");
+		createEnvironmentBinding({ runDirectory: asyncDir, sessionRoot, sessionFile, environment: { name: "test", digest: "pinned", files: [] } });
+		const dir = resolveSupervisorChannelDir(runId, "$task", 0);
+		createdChannels.push(dir);
+		// Bootstrap creates only the exact mount source, before the first ask.
+		fs.mkdirSync(dir, { recursive: true });
+		const old = new Date(Date.now() - 120_000);
+		fs.utimesSync(dir, old, old);
+		const inode = fs.statSync(dir).ino;
+		const owner = makeState("owner", null);
+		owner.asyncJobs.set(runId, { asyncId: runId, asyncDir, status: "running", steps: [{ agent: "$task", status: "running", index: 0 }] });
+		const sweep = (state: SubagentState, retained: SubagentState[] = []) => {
+			const channel = createNativeSupervisorChannel({ getAllTools: () => [], registerTool() {}, sendMessage() {} } as never, state, { platform: "darwin", getCurrentOwnerStates: () => retained });
+			try { channel.start(); } finally { channel.dispose(); }
+		};
+		try {
+			sweep(makeState("foreign", null));
+			sweep(owner);
+			assert.equal(fs.statSync(dir).ino, inode);
+			owner.asyncJobs.get(runId)!.status = "complete";
+			for (const state of ["pending", "unknown"]) {
+				fs.writeFileSync(processTerminalPath(asyncDir), JSON.stringify({ version: 1, runId, runnerProcessInstanceId: "runner", state }));
+				sweep(owner);
+				assert.equal(fs.statSync(dir).ino, inode, "terminal UI status is not process exit proof");
+			}
+			ensureSupervisorChannelDir(dir);
+			assert.equal(fs.statSync(dir).ino, inode, "first request can still create its directories");
+			ageChannel(dir, 120_000);
+			fs.writeFileSync(processTerminalPath(asyncDir), JSON.stringify({ version: 1, runId, runnerProcessInstanceId: "runner", state: "observed", observedAt: Date.now(), instances: [{ kind: "runner", processInstanceId: "runner", closeObservedAt: Date.now(), exitCode: 0, signal: null }] }));
+			sweep(makeState("foreign", null));
+			assert.equal(fs.existsSync(dir), true, "foreign parents cannot retire even terminal channels");
+			sweep(makeState("owner", null), [owner]);
+			assert.equal(fs.existsSync(dir), false, "retained owner state can clean confirmed terminal channels");
+		} finally {
+			fs.rmSync(asyncDir, { recursive: true, force: true });
+			fs.rmSync(environmentAuthorityDirectory(asyncDir), { recursive: true, force: true });
+		}
+	});
+
+	it("preserves stale empty channels with unknown ownership", () => {
 		const currentSessionId = `session-${randomUUID()}`;
 		const staleEmptyChannel = makeEmptyChannel(`run-${randomUUID()}`);
 		ageChannel(staleEmptyChannel, 2 * 60 * 1000);
@@ -530,7 +610,7 @@ describe("native supervisor channel", () => {
 		channel.start();
 		channel.dispose();
 
-		assert.equal(fs.existsSync(staleEmptyChannel), false);
+		assert.equal(fs.existsSync(staleEmptyChannel), true);
 		assert.deepEqual(sent, []);
 	});
 

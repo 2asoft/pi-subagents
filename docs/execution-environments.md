@@ -155,6 +155,8 @@ Let `T` be `PI_SUBAGENTS_TEMP_ROOT`, or the ordinary per-user temporary root. Fo
 
 `$task` is sanitized when constructing the supervisor directory. The exact channel path is supplied in `resources`. Resume binds the original session directory rather than copying the session into a new run.
 
+Empty supervisor channels are not expired by age alone: removing a live bind source would strand the child's mounted inode. Cleanup considers only terminal runs retained by the owning runtime; background runs also require existing process-terminal proof (`observed` or `not-started`). The 60-second age and empty-directory checks still apply. Foreign/unknown channels, non-empty channels, and channels lacking terminal proof remain untouched. If owner state is lost or evicted before cleanup, this sweep does not reclaim the orphan.
+
 `H` contains `binding.json`, `recovery-descriptor.json`, `owner.json`, `namespace-terminal.json`, `process-terminal-candidate.json`, `process-terminal.json`, and host control requests. Failed admission can leave an authority directory without a completed binding; recovery rejects that state. Worker recovery, PID fields, runner labels and terminal candidates cannot replace these records.
 
 The bootstrap contains explicit task data and admitted paths. Parent research instructions, conversation, ambient skills, provider registries and shared budget storage are excluded. Instruction and skill contents are read inside the namespace; admitted extensions load there. The configured agent directory supplies approved SDK resources. The normal temporary-config unlink is skipped for confined bootstrap files.
