@@ -378,7 +378,7 @@ function cleanupStaleEmptySupervisorChannels(states: Iterable<SubagentState>, no
 		for (const run of state.foregroundRuns?.values() ?? []) {
 			if (state.foregroundControls.has(run.runId)) continue;
 			for (const child of run.children) {
-				if (child.status === "detached" || child.status === "running") continue;
+				if (child.status !== "completed" && child.status !== "failed") continue;
 				dirs.add(resolveSupervisorChannelDir(run.runId, child.agent, child.index));
 			}
 		}

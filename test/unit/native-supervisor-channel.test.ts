@@ -507,7 +507,7 @@ describe("native supervisor channel", () => {
 		}
 	});
 
-	it("retains aged live and foreign channel inodes, then cleans owned terminal channels", () => {
+	for (const terminalStatus of ["completed", "failed"] as const) it(`retains aged live and foreign channel inodes, then cleans owned ${terminalStatus} channels`, () => {
 		const owner = randomUUID();
 		const runId = randomUUID();
 		const dir = makeEmptyChannel(runId);
@@ -526,7 +526,7 @@ describe("native supervisor channel", () => {
 		assert.equal(fs.existsSync(dir), true, "foreign parent must not unlink a live mount source");
 		sweep(state);
 		assert.equal(fs.statSync(dir).ino, inode, "live mount source retains its inode");
-		state.foregroundRuns.get(runId)!.children[0]!.status = "completed";
+		state.foregroundRuns.get(runId)!.children[0]!.status = terminalStatus;
 		const reply = path.join(dir, "replies", "reply.json");
 		fs.writeFileSync(reply, "{}");
 		ageChannel(dir, 120_000);
@@ -540,7 +540,29 @@ describe("native supervisor channel", () => {
 		assert.equal(fs.existsSync(dir), false);
 	});
 
-	it("requires host process termination before cleaning a confined background channel", () => {
+	for (const status of ["pending", "running", "detached", "paused", "stopped"] as const) {
+		it(`retains an aged ${status} foreground channel without a control entry`, () => {
+			const runId = randomUUID();
+			const dir = makeEmptyChannel(runId);
+			ageChannel(dir, 120_000);
+			const inode = fs.statSync(dir).ino;
+			const state = makeState("owner", null);
+			state.foregroundRuns = new Map([[runId, {
+				runId, mode: "single", cwd: process.cwd(), updatedAt: 1,
+				// Pending is also a foreground lifecycle status; exercise it even
+				// though the retained resume projection currently narrows its type.
+				children: [{ agent: "worker", index: 0, status: status as "running" }],
+			}]]);
+			const channel = createNativeSupervisorChannel({ getAllTools: () => [], registerTool() {}, sendMessage() {} } as never, state, { platform: "darwin" });
+			try {
+				channel.start();
+				assert.equal(fs.existsSync(dir), true);
+				assert.equal(fs.statSync(dir).ino, inode);
+			} finally { channel.dispose(); }
+		});
+	}
+
+	for (const jobStatus of ["complete", "failed", "paused", "rejected"] as const) it(`requires host process termination before cleaning a ${jobStatus} confined background channel`, () => {
 		const runId = randomUUID();
 		const asyncDir = path.join(DIRS.async, runId);
 		const sessionRoot = path.join(asyncDir, "session");
@@ -565,7 +587,9 @@ describe("native supervisor channel", () => {
 			sweep(makeState("foreign", null));
 			sweep(owner);
 			assert.equal(fs.statSync(dir).ino, inode);
-			owner.asyncJobs.get(runId)!.status = "complete";
+			owner.asyncJobs.get(runId)!.status = jobStatus;
+			sweep(owner);
+			assert.equal(fs.statSync(dir).ino, inode, "missing proof retains the channel");
 			for (const state of ["pending", "unknown"]) {
 				fs.writeFileSync(processTerminalPath(asyncDir), JSON.stringify({ version: 1, runId, runnerProcessInstanceId: "runner", state }));
 				sweep(owner);
@@ -579,6 +603,17 @@ describe("native supervisor channel", () => {
 			assert.equal(fs.existsSync(dir), true, "foreign parents cannot retire even terminal channels");
 			sweep(makeState("owner", null), [owner]);
 			assert.equal(fs.existsSync(dir), false, "retained owner state can clean confirmed terminal channels");
+			ensureSupervisorChannelDir(dir);
+			ageChannel(dir, 120_000);
+			fs.writeFileSync(processTerminalPath(asyncDir), JSON.stringify({ version: 1, runId, runnerProcessInstanceId: "runner", state: "not-started" }));
+			for (const liveStatus of ["queued", "running"] as const) {
+				owner.asyncJobs.get(runId)!.status = liveStatus;
+				sweep(owner);
+				assert.equal(fs.existsSync(dir), true, "not-started proof cannot retire a live job");
+			}
+			owner.asyncJobs.get(runId)!.status = jobStatus;
+			sweep(owner);
+			assert.equal(fs.existsSync(dir), false, "terminal job with not-started proof has no child writer");
 		} finally {
 			fs.rmSync(asyncDir, { recursive: true, force: true });
 			fs.rmSync(environmentAuthorityDirectory(asyncDir), { recursive: true, force: true });
