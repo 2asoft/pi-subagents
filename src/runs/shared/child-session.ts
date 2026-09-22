@@ -14,7 +14,6 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { CHILD_COMMAND_TOOL, createChildCommandRuntime } from "./child-commands.ts";
 import { supervisorChannelDir } from "./child-tool-plan.ts";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { DIRECT_TASK_AGENT } from "../../agents/direct-task.ts";
 import { pinChildCacheRetention } from "../../shared/child-cache-retention.ts";
 import { getAgentDir, PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../../shared/utils.ts";
@@ -579,8 +578,8 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 				subscribe: (listener) => session.subscribe((event) => listener(event as unknown as ChildSessionEvent)),
 				prompt: (text) => session.prompt(text),
 				...(commands ? { finishCommands: () => commands.finish() } : {}),
-				steer: (text) => session.steer(text),
-				followUp: (text) => session.followUp(text),
+				steer: async (text) => { await session.steer(text); },
+				followUp: async (text) => { await session.followUp(text); },
 				abort: () => session.abort(),
 				hasQueuedMessages: () => session.agent?.hasQueuedMessages?.() === true,
 				dispose: () => {

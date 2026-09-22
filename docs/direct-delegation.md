@@ -36,22 +36,27 @@ Applicable operator instructions held only in the parent conversation must be in
 
 ## Parallel work and dependencies
 
+Write the script in the reply:
+
+```js workflow
+return await runs.all(args.models.map((model, index) => ({
+  key: "review-" + index,
+  task: args.task,
+  model,
+  tools: ["read", "grep", "find", "ls"],
+  context: "fresh"
+})));
+```
+
+Then call `subagent` in that reply:
+
 ```js
 {
+  workflow: true,
   args: {
     task: "<exact filled reviewer template>",
     models: ["provider/model-a:medium", "provider/model-b:high"]
   },
-  workflowScript: `
-    const reviews = await runs.all(args.models.map((model, index) => ({
-      key: "review-" + index,
-      task: args.task,
-      model,
-      tools: ["read", "grep", "find", "ls"],
-      context: "fresh"
-    })));
-    return reviews;
-  `,
   async: true,
   mission: false
 }
@@ -59,7 +64,7 @@ Applicable operator instructions held only in the parent conversation must be in
 
 Each direct `runs.run` or `runs.all` child resolves after terminal execution, including children with `async: true`. Inspect each result's state and output before aggregation. A review reporting defects can execute successfully; interpret its verdict using the skill's contract.
 
-Workflow `args` have a 16 KiB limit. Store a shared template once and reuse it across children. For larger orchestration input, prepare a `workflowScriptPath` with filled task strings and evidence paths. The sandbox cannot read files. Keep task instructions in the skill; scripts express dispatch, dependencies, and collection.
+Workflow `args` have a 16 KiB limit. Store a shared template once and reuse it across children. For larger orchestration input, prepare a script file with filled task strings and evidence paths and pass `workflow: "./path/to/script.js"`. The sandbox cannot read files. Keep task instructions in the skill; scripts express dispatch, dependencies, and collection.
 
 `mission: false` selects ephemeral workflow orchestration. Omit it when the existing mission tracking is wanted. Existing concurrency and cumulative spawn limits apply; they are not global limits across all Pi sessions.
 
@@ -82,7 +87,7 @@ The child uses `contact_supervisor` with `reason: "need_decision"` and `message`
 
 Missing routing, tool restrictions that remove the requested supervisor, or unavailable required direct tools fail before model execution. Availability is checked after native tool registration. Named profiles retain their existing bridge/tool behavior. Resume retains the explicit tool request and provisions routing for the resumed run.
 
-For confined native background tasks, see [Linux execution environments](execution-environments.md). Unlimited waits remain a separate proposal.
+For confined native background tasks, see [Linux execution environments](execution-environments.md).
 
 ## Controls and resume
 
@@ -105,4 +110,4 @@ Retain foreground run IDs for direct resume. `children.list` enumerates retained
 
 Live verification must also inspect the provider payload and exercise the installed Pi runtime, selected models, tool providers, steering, interruption, cancellation, and resume. Fixture tests establish assembly and lifecycle behavior; live model output establishes only the behavior observed in that trial.
 
-Verification on 2026-09-17 used Pi 0.85.1. Provider payloads retained the filled reviewer template, selected tool allowlist, and Luna/high or Sol/medium model settings. Parallel dispatch, delivered steering, stop, interrupt/resume, project context, and MCP discovery through the installed adapter completed. The MCP child connected exa and discovered `exa_web_search_exa`. The final automated checks passed 3,299 unit tests and 1,062 integration tests, with 20 skipped, plus typecheck and package build.
+Development and automated verification target Pi 1.0.0. `npm run test:smoke:tool-activation` exercises real SDK sessions with a local provider, checking dynamic activation and the complete direct-task schema. Live provider and hardware behavior require separate verification; passing fixture tests does not establish those outcomes.

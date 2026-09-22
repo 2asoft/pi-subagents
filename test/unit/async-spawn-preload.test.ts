@@ -14,7 +14,7 @@ test("executeAsyncSingle preloads all peer aliases before the selected runner lo
 	const expectedAliases: Record<string, string> = {};
 	const hostExports: Record<string, string[]> = {
 		"@earendil-works/pi-coding-agent": ["."],
-		"@earendil-works/pi-agent-core": [".", "./node"],
+		"@earendil-works/pi-agent-core": ["."],
 		"@earendil-works/chord": [".", "./context"],
 		"@earendil-works/pi-tui": ["."],
 		"@earendil-works/pi-ai": ["./compat", "./oauth", "./providers/all"],
@@ -53,7 +53,7 @@ test("executeAsyncSingle preloads all peer aliases before the selected runner lo
 				fs.rmSync(path.join(host, "node_modules", "@earendil-works/chord"), { recursive: true });
 				for (const specifier of ["@earendil-works/chord", "@earendil-works/chord/context"]) delete expectedAliases[specifier];
 			}
-			if (scenario === "missing-pre-chord") fs.unlinkSync(expectedAliases["@earendil-works/pi-agent-core/node"]!);
+			if (scenario === "missing-pre-chord") fs.unlinkSync(expectedAliases["@earendil-works/pi-tui"]!);
 			const configuredExtension = scenario === "pre-chord" ? fileURLToPath(import.meta.url) : undefined;
 			const result = executeAsyncSingle(`spawn-preload-${scenario}`, {
 				agent: "worker", task: "Inspect launch wiring", agentConfig: makeAgent("worker", configuredExtension ? { extensions: [configuredExtension] } : {}),
@@ -63,7 +63,7 @@ test("executeAsyncSingle preloads all peer aliases before the selected runner lo
 			});
 			assert.equal(result.isError, true);
 			if (scenario === "missing-pre-chord") {
-				assert.match(result.content[0]!.text, /@earendil-works\/pi-agent-core\/node/);
+				assert.match(result.content[0]!.text, /@earendil-works\/pi-tui/);
 				assert.equal(spawn.mock.callCount(), 2);
 				continue;
 			}

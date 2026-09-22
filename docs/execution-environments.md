@@ -23,7 +23,7 @@ Direct background tasks can select a trusted, registered bubblewrap policy. The 
 
 Model and thinking selection use the ordinary direct-task fields. Resume restores the selection retained by the host. The admitted child configuration must provide that model and any required provider extension.
 
-This increment supports one native direct leaf on Linux, with canonical absolute run paths and a cwd prepared by the caller. It uses `/usr/bin/bwrap` and `/usr/bin/node`; source checkouts require Node's TypeScript stripping support. Verification used bubblewrap 0.12.0 and Node 26.8.2.
+An execution environment supports one native direct leaf on Linux, with canonical absolute run paths and a cwd prepared by the caller. It uses `/usr/bin/bwrap` and `/usr/bin/node`; source checkouts require Node's TypeScript stripping support. Verification used bubblewrap 0.12.0 and Node 26.8.2.
 
 Foreground execution, forked context, named profiles, nested delegation, remote machines, managed worktree creation, host acceptance/gates, managed output destinations, and caller-selected skills/extensions are rejected. The adapter supplies admitted skill and extension paths. Tool patterns that admit `subagent` or `subagent_supervisor` are rejected; `contact_supervisor` is supported. Unsupported requests and failed startup never fall back to ordinary host execution or an external CLI runner.
 
@@ -183,4 +183,4 @@ Missing namespace identity or inaccessible evidence prevents observed terminatio
 
 Run `node --experimental-strip-types test/smoke/environment-background.mjs /path/to/pi` for the native SDK smoke. It uses a synthetic provider, two parent Pi processes, supervisor request/reply, retained resume, writable recovery replacement, definition drift, session-path rejection and context/filesystem canaries. Evidence remains in the printed temporary directory.
 
-Reload the parent extension and trusted registration extension after deploying this increment. Existing children retain their loaded runtime. This change does not configure retention, unlimited deadlines or acceptance caching; those remain separate increments.
+Reload the parent extension and trusted registration extension after deployment. Existing children retain their loaded runtime. Configure retention and deadlines separately from environment registration.

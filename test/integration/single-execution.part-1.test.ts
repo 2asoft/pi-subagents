@@ -102,14 +102,15 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(updates.length, count, "no trailing timer after settlement");
 	});
 
-	it("names the workflow child that has no agent", async () => {
+	it("runs a workflow child with an exact task and no named profile", async () => {
 		const result = await makeExecutor([makeAgent("worker")]).execute("wf-missing-agent", {
 			workflowScript: `const [child] = await runs.all([{ key: "r1", task: "Review", async: false }]); return child.ok ? "ok" : child.error;`,
 			async: false,
 		}, undefined, undefined, makeMinimalCtx(tempDir));
 		const text = JSON.stringify(result.content);
-		assert.match(text, /Workflow child 'r1' has no agent\. Pass \{ key, agent, task \}\. Agents: worker/);
-		assert.doesNotMatch(text, /Provide exactly one mode/);
+		assert.equal(result.isError, undefined, text);
+		assert.match(text, /Workflow completed/);
+		assert.match(text, /run r1: completed/);
 	});
 
 	for (const { name, asyncByDefault, id, reason } of [

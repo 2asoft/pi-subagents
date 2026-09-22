@@ -95,30 +95,34 @@ test("every host peer package the detached async runner imports is aliased to th
 	assert.ok(packageRoot, "expected the pi package (or its test shim) to be resolvable");
 	const resolved = resolveHostPeerAliases(packageRoot);
 	assert.deepEqual(resolved.missing, []);
-	for (const specifier of aliased) assert.ok(fs.existsSync(resolved.aliases[specifier]!), `alias target for ${specifier} exists`);
+	for (const entry of HOST_PEER_ALIASES) {
+		const target = resolved.aliases[entry.specifier];
+		if (entry.optional && target === undefined) continue;
+		assert.ok(target && fs.existsSync(target), `alias target for ${entry.specifier} exists`);
+	}
 });
 
-test("resolves pi-agent-core/node to its exact package export instead of appending to the root alias", () => {
+test("resolves pi-ai/oauth to its exact package export instead of appending to the root alias", () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-core-node-alias-"));
-	const packageDir = path.join(root, "node_modules", "@earendil-works", "pi-agent-core");
+	const packageDir = path.join(root, "node_modules", "@earendil-works", "pi-ai");
 	const distDir = path.join(packageDir, "dist");
 	try {
 		fs.mkdirSync(distDir, { recursive: true });
 		fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({
-			name: "@earendil-works/pi-agent-core",
-			version: "0.85.1-test",
+			name: "@earendil-works/pi-ai",
+			version: "1.0.0-test",
 			exports: {
-				".": "./dist/index.js",
-				"./node": "./dist/node.js",
+				"./compat": "./dist/index.js",
+				"./oauth": "./dist/oauth.js",
 			},
 		}), "utf-8");
 		fs.writeFileSync(path.join(distDir, "index.js"), "export {};\n", "utf-8");
-		fs.writeFileSync(path.join(distDir, "node.js"), "export {};\n", "utf-8");
+		fs.writeFileSync(path.join(distDir, "oauth.js"), "export {};\n", "utf-8");
 
 		const resolved = resolveHostPeerAliases(root);
-		assert.equal(resolved.aliases["@earendil-works/pi-agent-core"], fs.realpathSync(path.join(distDir, "index.js")));
-		assert.equal(resolved.aliases["@earendil-works/pi-agent-core/node"], fs.realpathSync(path.join(distDir, "node.js")));
-		assert.notEqual(resolved.aliases["@earendil-works/pi-agent-core/node"], path.join(distDir, "index.js", "node"));
+		assert.equal(resolved.aliases["@earendil-works/pi-ai"], fs.realpathSync(path.join(distDir, "index.js")));
+		assert.equal(resolved.aliases["@earendil-works/pi-ai/oauth"], fs.realpathSync(path.join(distDir, "oauth.js")));
+		assert.notEqual(resolved.aliases["@earendil-works/pi-ai/oauth"], path.join(distDir, "index.js", "oauth"));
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}

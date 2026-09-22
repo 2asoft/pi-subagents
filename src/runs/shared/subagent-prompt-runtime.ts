@@ -207,7 +207,7 @@ function stripChildBoundaryInstructions(prompt: string): string {
 
 export function rewriteSubagentPrompt(
 	prompt: string,
-	options: { inheritProjectContext: boolean; inheritGlobalContext: boolean; inheritSkills: boolean; fanoutChild?: boolean; structuredOutput?: boolean; boundaryInstructions?: string | false },
+	options: { inheritProjectContext: boolean; inheritGlobalContext: boolean; inheritSkills: boolean; fanoutChild?: boolean; structuredOutput?: boolean; directTask?: boolean },
 ): string {
 	let rewritten = prompt;
 	if (!options.inheritProjectContext) {
@@ -221,8 +221,8 @@ export function rewriteSubagentPrompt(
 	}
 	rewritten = stripSubagentOrchestrationSkill(rewritten);
 	rewritten = stripChildBoundaryInstructions(rewritten);
-	const boundary = options.boundaryInstructions === false ? "" : options.boundaryInstructions
-		?? (options.fanoutChild ? CHILD_FANOUT_BOUNDARY_INSTRUCTIONS : CHILD_SUBAGENT_BOUNDARY_INSTRUCTIONS);
+	const boundary = options.directTask ? ""
+		: options.fanoutChild ? CHILD_FANOUT_BOUNDARY_INSTRUCTIONS : CHILD_SUBAGENT_BOUNDARY_INSTRUCTIONS;
 	// Pi's base prompt stays first so providers that recognize it by its opening still do.
 	const sections = [rewritten, boundary, options.structuredOutput ? STRUCTURED_OUTPUT_INSTRUCTIONS : ""];
 	return sections.filter(section => section.length > 0).join("\n\n");
@@ -570,7 +570,7 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config?:
 				inheritSkills: inheritSkills ?? true,
 				fanoutChild,
 				structuredOutput: Boolean(config.structuredOutput),
-				boundaryInstructions: config.agent === DIRECT_TASK_AGENT ? false : undefined,
+				directTask: config.agent === DIRECT_TASK_AGENT,
 			});
 		}
 		if (rewritten === event.systemPrompt) return;
