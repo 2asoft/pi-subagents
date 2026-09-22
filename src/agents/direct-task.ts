@@ -1,9 +1,9 @@
-import { fileURLToPath } from "node:url";
 import * as fs from "node:fs";
-import { writePrivateAtomicJson } from "../shared/atomic-json.ts";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Type, type Static } from "typebox";
 import { Check, Errors } from "typebox/value";
+import { writePrivateAtomicJson } from "../shared/atomic-json.ts";
 import type { AgentConfig } from "./agents.ts";
 
 /** Internal identity for native tasks supplied without a named profile. */
