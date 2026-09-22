@@ -10,7 +10,14 @@
 
 ## Local fork
 
-This checkout adds [direct task delegation](docs/direct-delegation.md). Omit `agent` and supply the exact skill task, model, tools, and required context. Named profiles remain available explicitly. [Linux execution environments](docs/execution-environments.md) add registered bubblewrap policies for confined native background leaves.
+The fork keeps four changes above upstream:
+
+- Foreground resume retains the original fresh or forked context.
+- [Direct task delegation](docs/direct-delegation.md) accepts the exact task, instructions, tools, and inheritance settings without a named profile. Explicit supervisor access and retained resume configuration use the existing launch pipeline.
+- [Linux execution environments](docs/execution-environments.md) run native background tasks under registered bubblewrap policies. Channel cleanup requires ownership and terminal evidence.
+- SDK integration targets Pi 1.0.0, including the reduced agent-core exports. Dependency updates retain the supported runtime versions.
+
+Workflow syntax, model-dependent tool activation, built-in MCP support, and orchestration follow upstream. Named profiles remain available explicitly.
 
 Load this checkout for a session:
 

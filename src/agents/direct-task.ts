@@ -1,9 +1,9 @@
-import { fileURLToPath } from "node:url";
 import * as fs from "node:fs";
-import { writePrivateAtomicJson } from "../shared/atomic-json.ts";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Type, type Static } from "typebox";
 import { Check, Errors } from "typebox/value";
+import { writePrivateAtomicJson } from "../shared/atomic-json.ts";
 import type { AgentConfig } from "./agents.ts";
 
 /** Internal identity for native tasks supplied without a named profile. */
@@ -12,8 +12,8 @@ export const DIRECT_TASK_AGENT = "$task";
 export const DirectTaskSchema = Type.Object({
 	executionEnvironment: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", description: "Registered Linux/bubblewrap environment for a native background direct leaf task." })),
 	instructions: Type.Optional(Type.String({ description: "Direct task system instructions." })),
-	tools: Type.Optional(Type.Array(Type.String({ pattern: "\\S" }), { description: "Direct task tools; [] for none." })),
-	extensions: Type.Optional(Type.Array(Type.String({ pattern: "\\S" }), { description: "Direct task extension paths; [] disables ambient loading." })),
+	tools: Type.Optional(Type.Array(Type.String({ pattern: "^[\\s\\S]*\\S[\\s\\S]*$" }), { description: "Direct task tools; [] for none." })),
+	extensions: Type.Optional(Type.Array(Type.String({ pattern: "^[\\s\\S]*\\S[\\s\\S]*$" }), { description: "Direct task extension paths; [] disables ambient loading." })),
 	inheritProjectContext: Type.Optional(Type.Boolean()),
 	inheritGlobalContext: Type.Optional(Type.Boolean()),
 	inheritSkills: Type.Optional(Type.Boolean()),

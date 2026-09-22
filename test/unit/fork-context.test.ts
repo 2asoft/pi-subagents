@@ -209,7 +209,7 @@ describe("createForkContextResolver", () => {
 		}
 	});
 
-	it("fails clearly for an unflushed user-only parent", () => {
+	it("forks a parent persisted at its first user message", () => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-fork-user-only-"));
 		try {
 			const sessionDir = path.join(tempDir, "sessions");
@@ -220,16 +220,16 @@ describe("createForkContextResolver", () => {
 
 			assert.ok(parentSessionFile);
 			assert.ok(leafId);
-			assert.equal(fs.existsSync(parentSessionFile), false);
+			assert.equal(fs.existsSync(parentSessionFile), true);
 
 			const resolver = createForkContextResolver(parent, "fork");
-			assert.throws(
-				() => resolver.sessionFileForIndex(0),
-				/Failed to create forked subagent session: Parent session file does not exist: .*Pi has not persisted enough history to fork yet\./,
-			);
+			const childSessionFile = resolver.sessionFileForIndex(0);
+			assert.ok(childSessionFile);
+			assert.notEqual(childSessionFile, parentSessionFile);
+			assert.equal(fs.existsSync(childSessionFile), true);
 			assert.equal(parent.getSessionFile(), parentSessionFile);
 			assert.equal(parent.getLeafId(), leafId);
-			assert.equal(fs.existsSync(parentSessionFile), false);
+			assert.equal(fs.existsSync(parentSessionFile), true);
 		} finally {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}

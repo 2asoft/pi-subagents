@@ -95,7 +95,7 @@ describe("registered subagent tool description", () => {
 				/preserve task-specified output destinations.*outputReference.*outputPathMapping.*artifactPaths/,
 				/children.list.*resume only resumable rows.*stored agent\/model\/tool contract.*If none is resumable.*same-role fallback challenge/,
 				/latest returned runId.*distinct resume pass needs a new stable key.*identical launch parameters/,
-				/Oracle\/advisor.*supervisor dialogue/,
+				/Direct tasks add no persona, child-boundary prose, supervisor instructions, refinement overlay, inferred acceptance gate, edit demand, or output destination/,
 				/raw scripts \(workflow:true or a path\) cannot use runs.host/,
 				/Granted commands\/relative outputs use workflow cwd, never per-step cwd/,
 				/worktree:true requires clean source.*baseRef defaults to HEAD at allocation.*named ref, never full 40\/64-character commit IDs or revision expressions/,
