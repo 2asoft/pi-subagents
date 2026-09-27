@@ -2,10 +2,16 @@
 
 ## [Unreleased]
 
+## [0.73.1] - 2026-09-27
+
+### Highlights
+
+- Turning on `subagent` mid-session no longer throws away the prompt cache, so the next message no longer resends the whole conversation.
+
 ### Fixed
 
-- Stopping a background run while it was shutting down could report "Stop requested" even though the runner never read the stop, so an interrupted run finished as paused instead of stopped. The stop now fails with a message to retry once the runner has exited, and that retry stops a paused run.
 - Turning on `subagent` no longer throws away the prompt cache. The catalog of advertised agents is now sent as its own `advertised_subagents` prompt section, which Pi adds at the end of the conversation. Before, pi-subagents rewrote the whole system prompt, so the first message after `subagents_enable` resent the entire conversation to the cache. Fixes [#2518](https://github.com/nicobailon/pi-subagents/issues/2518). Thanks to [@javapacr](https://github.com/javapacr) for [#2519](https://github.com/nicobailon/pi-subagents/pull/2519).
+- Stopping a background run while it was shutting down could report "Stop requested" even though the runner never read the stop, so an interrupted run finished as paused instead of stopped. The stop now fails with a message to retry once the runner has exited, and that retry stops a paused run.
 
 ## [0.73.0] - 2026-09-27
 
