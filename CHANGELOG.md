@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.72.1] - 2026-09-26
+
+### Fixed
+
+- pi-subagents is published with npm provenance again, so pnpm's `trustPolicy: no-downgrade` accepts it. Releases now go out only through the GitHub `Release` workflow after maintainer approval. The code is the same as 0.72.0, which was published without provenance. Thanks to [@williameckert1](https://github.com/williameckert1) for [#2453](https://github.com/nicobailon/pi-subagents/issues/2453).
+
 ## [0.72.0] - 2026-09-26
 
 ### Highlights
