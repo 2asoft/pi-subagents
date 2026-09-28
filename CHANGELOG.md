@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Compaction-triggered child aborts now recover when Pi reports `compaction_start` after `agent_settled`. Thanks to [@jiuai233](https://github.com/jiuai233) for [#2537](https://github.com/nicobailon/pi-subagents/pull/2537).
 - Machine-generated worktree patches now use explicit `a/` and `b/` prefixes instead of Git's newer `--default-prefix` option, so diff capture works on older Git releases while still overriding `diff.noprefix`. Thanks to [@quifox](https://github.com/quifox) for [#2527](https://github.com/nicobailon/pi-subagents/pull/2527).
 - Dynamic tool activation now works in hosts that run Pi in-process, such as pi-web. pi-subagents no longer tries to read the host Pi version from disk before enabling `subagents_enable`, so those hosts no longer print "Could not locate the running Pi installation" and keep `subagent` always loaded; Pi 0.86.1 is already the oldest supported host. Thanks to [@q107580018](https://github.com/q107580018) for [#2526](https://github.com/nicobailon/pi-subagents/issues/2526).
 - MCP `mcp:` direct-tool selectors no longer fail closed after upgrading pi-mcp-adapter to 3.1.0, whose config hash adds a stdio server's `inheritEnv` and `literalEnv` settings to the identity. Child resolution now computes the same hash, so cached tool metadata stays valid and configured direct tools resolve again. Thanks to [@qsgy-edge](https://github.com/qsgy-edge) for [#2539](https://github.com/nicobailon/pi-subagents/pull/2539).
