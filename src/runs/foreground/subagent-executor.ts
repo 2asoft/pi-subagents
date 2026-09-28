@@ -24,6 +24,7 @@ import { handleRefinementAction } from "../../agents/agent-refinements.ts";
 import { buildDoctorReport } from "../../extension/doctor.ts";
 import { readSubagentGuide } from "../../extension/subagent-guide.ts";
 import { normalizePublicSubagentExecution, validateWorkflowCapacityOverrides } from "../../extension/public-execution.ts";
+import { disabledFeatureNotice, disabledFeatureUseError, resolveDisabledFeatureSurface, type DisabledFeatureSurface } from "../../shared/disabled-features.ts";
 import { runSync } from "./execution.ts";
 import { handleWatchdogToolAction, WATCHDOG_TOOL_ACTIONS } from "../../watchdog/tool-actions.ts";
 import type { MainWatchdogRuntime } from "../../watchdog/runtime.ts";
@@ -246,16 +247,17 @@ function hasSingleAdjacentTransposition(left: string, right: string): boolean {
 		&& left.slice(mismatch + 2) === right.slice(mismatch + 2);
 }
 
-export function unknownSubagentActionMessage(action: string): string {
+export function unknownSubagentActionMessage(action: string, disabled?: DisabledFeatureSurface): string {
 	const requested = action.toLowerCase();
-	const suggestion = SUBAGENT_ACTIONS.find((candidate) => {
+	const enabledActions = SUBAGENT_ACTIONS.filter((candidate) => !disabled?.actions.has(candidate));
+	const suggestion = enabledActions.find((candidate) => {
 		const distance = editDistance(requested, candidate);
 		const closeMatch = distance <= Math.max(1, Math.floor(candidate.length / 4)) || hasSingleAdjacentTransposition(requested, candidate);
 		if (DESTRUCTIVE_MANAGEMENT_ACTIONS.has(candidate)) return distance === 1 && requested.length >= candidate.length - 1;
 		return closeMatch;
 	});
 	const nextStep = 'Use subagent({ action: "status" }) to inspect runs or subagent({ action: "list" }) to inspect agents.';
-	const validActions = `Valid: ${SUBAGENT_ACTIONS.join(", ")}.`;
+	const validActions = `Valid: ${enabledActions.join(", ")}.`;
 	return suggestion
 		? `Unknown action: ${action}. Did you mean ${suggestion}? ${nextStep} ${validActions}`
 		: `Unknown action: ${action}. ${nextStep} ${validActions}`;
@@ -4441,7 +4443,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 }
 
 function inferExecutionMode(params: SubagentParamsLike): Details["mode"] {
-	if (params.workflowScript !== undefined) return "workflow";
+	if (params.workflowScript !== undefined || params.workflowScriptPath !== undefined || params.workflow !== undefined) return "workflow";
 	if ((params.chain?.length ?? 0) > 0) return "chain";
 	if ((params.tasks?.length ?? 0) > 0) return "parallel";
 	return "single";
@@ -5234,6 +5236,18 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	const workflowPermitContexts = new WeakMap<object, { root: WorkflowChildPermit } | { child: WorkflowChildPermitContext }>();
 	const warnedArtifactPackageDirs = new Set<string>();
 	const scheduledOwnerExecutors = new Map<string | null, Map<string, { state: SubagentState; executor: ReturnType<typeof createSubagentExecutor> }>>();
+	const disabledFeatures = resolveDisabledFeatureSurface(deps.config);
+	const disabledFeatureResult = (params: SubagentParamsLike): AgentToolResult<Details> | undefined => {
+		const error = disabledFeatureUseError(params, disabledFeatures);
+		if (!error) return undefined;
+		return { content: [{ type: "text", text: error }], isError: true, details: { mode: params.action === undefined ? inferExecutionMode(params) : "management", results: [] } };
+	};
+	const admitEnabledWorkflowChildren = (calls: Array<{ key: string; params: Record<string, unknown> }>): void => {
+		for (const call of calls) {
+			const error = disabledFeatureUseError(call.params, disabledFeatures, `workflow child '${call.key}'`);
+			if (error) throw new Error(error);
+		}
+	};
 	const execute = async (
 		_id: string,
 		params: SubagentParamsLike,
@@ -6044,6 +6058,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								} });
 							},
 							admit: async (calls, admissionSignal) => {
+								admitEnabledWorkflowChildren(calls);
 								await preflightWorkflowWorktrees({ workflowDefaults: workflowChildDefaults, defaultWorktree: deps.config.worktree, calls, ctxCwd: parentCwd, signal: admissionSignal, deadlineAt: workflowDeadlineAt });
 								const outputClaims = workflowChildOutputClaims({ ctxCwd: parentCwd, workflowCwd, artifactsDir: workflowArtifactsDir, workflowRunId, aggregateOutputPath: workflowAggregateOutputPath, configuredOutputBaseDir, discoverAgents: discoverWorkflowAgents, agents: workflowAgents, workflowAgentScope: workflowChildDefaults.agentScope, state: deps.state, claimedOutputPaths, entries: calls });
 								if (outputClaims.error) throw new Error(outputClaims.error);
@@ -6325,6 +6340,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						sendWorkflowProgress();
 					},
 					admit: async (calls, admissionSignal) => {
+						admitEnabledWorkflowChildren(calls);
 						await preflightWorkflowWorktrees({ workflowDefaults: workflowChildDefaults, defaultWorktree: deps.config.worktree, calls, ctxCwd: ctx.cwd, signal: admissionSignal, deadlineAt: workflowDeadlineAt });
 						const outputClaims = workflowChildOutputClaims({ ctxCwd: ctx.cwd, workflowCwd, artifactsDir: workflowArtifactsDir, workflowRunId: foregroundWorkflowRunId, aggregateOutputPath: workflowAggregateOutputPath, configuredOutputBaseDir, discoverAgents: discoverWorkflowAgents, agents: workflowAgents, workflowAgentScope: workflowChildDefaults.agentScope, state: deps.state, claimedOutputPaths, entries: calls });
 						if (outputClaims.error) throw new Error(outputClaims.error);
@@ -6764,8 +6780,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			}
 			if (action === "guide") {
 				try {
+					const guide = readSubagentGuide(paramsWithResolvedCwd.topic);
+					const notice = paramsWithResolvedCwd.topic === "tool-reference" ? disabledFeatureNotice(disabledFeatures) : undefined;
 					return {
-						content: [{ type: "text", text: readSubagentGuide(paramsWithResolvedCwd.topic) }],
+						content: [{ type: "text", text: notice ? `${notice}\n\n${guide}` : guide }],
 						details: { mode: "management", results: [] },
 					};
 				} catch (error) {
@@ -6982,7 +7000,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			}
 			if (action.startsWith("schedule.")) {
 				if (!isScheduledRunAction(action)) {
-					return { content: [{ type: "text", text: unknownSubagentActionMessage(action) }], isError: true, details: { mode: "management", results: [] } };
+					return { content: [{ type: "text", text: unknownSubagentActionMessage(action, disabledFeatures) }], isError: true, details: { mode: "management", results: [] } };
 				}
 				if (deps.allowMutatingManagementActions === false && MUTATING_MANAGEMENT_ACTIONS.has(action)) {
 					return {
@@ -7144,7 +7162,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			}
 			if (!(SUBAGENT_ACTIONS as readonly string[]).includes(action)) {
 				return {
-					content: [{ type: "text", text: unknownSubagentActionMessage(action) }],
+					content: [{ type: "text", text: unknownSubagentActionMessage(action, disabledFeatures) }],
 					isError: true,
 					details: { mode: "management" as const, results: [] },
 				};
@@ -7794,6 +7812,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<Details>> => {
+		const disabledFeatureError = disabledFeatureResult(params);
+		if (disabledFeatureError) return Promise.resolve(disabledFeatureError);
 		const normalized = normalizePublicSubagentExecution(params);
 		if (!normalized.ok) {
 			return Promise.resolve({ content: [{ type: "text", text: normalized.error }], isError: true, details: { mode: normalized.mode, results: [] } });
@@ -7825,6 +7845,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<Details>> => {
+		const disabledFeatureError = disabledFeatureResult(params);
+		if (disabledFeatureError) return disabledFeatureError;
 		const delegatedParams = { ...params };
 		const privateParams = delegatedParams as SubagentParamsLike & {
 			delegatedThinkingOverride?: AgentConfig["thinking"];
