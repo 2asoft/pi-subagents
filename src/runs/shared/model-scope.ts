@@ -48,6 +48,12 @@ export interface ModelScopeViolation {
 	origin: string;
 }
 
+/** Reserved allow-pattern token expanding to the parent session's scoped-model set (pi's `/scoped-models`). */
+export const SCOPED_PATTERN = "scoped";
+
+/** Maximum number of patterns rendered in a violation message before the list is summarized. */
+const MAX_RENDERED_PATTERNS = 8;
+
 function stripThinkingSuffix(model: string): string {
 	return splitKnownThinkingSuffix(model).baseModel;
 }
@@ -86,6 +92,9 @@ export function checkModelScope(
 	const baseModel = stripThinkingSuffix(model);
 	const severity: ModelScopeViolation["severity"] = source === "explicit" || scope.strict === true ? "error" : "warn";
 	const origin = scope.origin ?? "modelScope";
+	const rendered = allow.length <= MAX_RENDERED_PATTERNS
+		? allow.join(", ")
+		: `${allow.slice(0, MAX_RENDERED_PATTERNS).join(", ")}, … (${allow.length} patterns total)`;
 	return {
 		model: baseModel,
 		severity,
@@ -93,12 +102,34 @@ export function checkModelScope(
 		origin,
 		message:
 			`Model '${baseModel}' is outside the configured subagent model scope (${origin}). ` +
-			`Allowed patterns: ${allow.join(", ")}.`,
+			`Allowed patterns: ${rendered}.`,
 	};
 }
 
-function expandInheritPattern(pattern: string, parentModel: { provider: string; id: string } | undefined): string {
-	return pattern === "inherit" && parentModel ? `${parentModel.provider}/${parentModel.id}` : pattern;
+/**
+ * Expand reserved allow-pattern tokens into concrete `provider/id` patterns.
+ *
+ * - `inherit` expands to the parent session's current model.
+ * - `scoped` expands to the parent session's scoped-model snapshot (pi's
+ *   `/scoped-models`); when no scoping is configured the snapshot is empty and
+ *   the token degrades to `inherit` semantics.
+ * - Any other pattern is returned unchanged.
+ *
+ * When neither input is available the token is returned unexpanded so the
+ * enforced-inherit fail-closed path in model-resolution.ts can reject it;
+ * unenforced configs never reach the matcher, so the literal stays inert.
+ */
+function expandReservedPatterns(
+	pattern: string,
+	parentModel: { provider: string; id: string } | undefined,
+	scopedModelIds: readonly string[] | undefined,
+): string[] {
+	if (pattern === SCOPED_PATTERN) {
+		if (scopedModelIds?.length) return [...scopedModelIds];
+		return parentModel ? [`${parentModel.provider}/${parentModel.id}`] : [pattern];
+	}
+	if (pattern === "inherit") return parentModel ? [`${parentModel.provider}/${parentModel.id}`] : [pattern];
+	return [pattern];
 }
 
 function assertRecord(value: unknown, field: string, meta: { filePath: string }, expected = "an object"): Record<string, unknown> {
@@ -145,23 +176,25 @@ export function resolveModelScopesForAgent(
 	config: ModelScopeConfig | undefined,
 	agentName: string,
 	parentModel: { provider: string; id: string } | undefined,
+	scopedModelIds?: readonly string[],
 ): ResolvedModelScope[] {
 	if (!config) return [];
 	const scopes: ResolvedModelScope[] = [];
 	if (config.allow) {
-		scopes.push({
-			...(config.enforce !== undefined ? { enforce: config.enforce } : {}),
-			...(config.strict !== undefined ? { strict: config.strict } : {}),
-			allow: config.allow.map((pattern) => expandInheritPattern(pattern, parentModel)),
+		const globalScope: ResolvedModelScope = {
+			allow: config.allow.flatMap((pattern) => expandReservedPatterns(pattern, parentModel, scopedModelIds)),
 			origin: "modelScope",
-		});
+		};
+		if (config.enforce !== undefined) globalScope.enforce = config.enforce;
+		if (config.strict !== undefined) globalScope.strict = config.strict;
+		scopes.push(globalScope);
 	}
 	const agentScope = config.agents?.[agentName];
 	if (agentScope?.allow) {
 		scopes.push({
 			enforce: agentScope.enforce ?? config.enforce,
 			strict: agentScope.strict ?? config.strict,
-			allow: agentScope.allow.map((pattern) => expandInheritPattern(pattern, parentModel)),
+			allow: agentScope.allow.flatMap((pattern) => expandReservedPatterns(pattern, parentModel, scopedModelIds)),
 			origin: `modelScope.agents.${agentName}`,
 		});
 	}

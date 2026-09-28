@@ -29,7 +29,7 @@ import { handleWatchdogToolAction, WATCHDOG_TOOL_ACTIONS } from "../../watchdog/
 import type { MainWatchdogRuntime } from "../../watchdog/runtime.ts";
 import { applyWatchdogLaunchRules } from "../../watchdog/rules.ts";
 import { childWatchdogProgressForModel } from "../../watchdog/child-status.ts";
-import { normalizeParentModel, resolveEffectiveSubagentModel, resolveModelOrigin, resolveModelSelection, type ModelOrigin, type ParentModel } from "../shared/model-resolution.ts";
+import { normalizeParentModel, resolveEffectiveSubagentModel, resolveModelOrigin, resolveModelSelection, scopedModelIdsFromContext, type ModelOrigin, type ParentModel } from "../shared/model-resolution.ts";
 import { projectChainOutputSchemas, resolveEffectiveOutputSchema } from "../shared/child-launch-plan.ts";
 import { formatRetainedChildren, listRetainedChildren } from "../background/retained-children.ts";
 import { resolveModelScopesForAgent, type ModelScopeConfig } from "../shared/model-scope.ts";
@@ -531,6 +531,8 @@ interface ExecutionContextData {
 	contextPolicy: AgentDefaultContextPolicy;
 	modelScope?: ModelScopeConfig;
 	parentModel?: ParentModel;
+	/** Scoped-model snapshot captured with parentModel; drives the `scoped` allow token. */
+	scopedModelIds?: string[];
 	parentSessionId: string | null;
 	parentPiSessionId?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
@@ -1367,6 +1369,7 @@ function appendStepToAsyncChain(input: {
 		parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 		currentModelProvider: parentModel?.provider,
 		currentModel: parentModel,
+		scopedModelIds: scopedModelIdsFromContext(input.ctx),
 		modelScope: discoveredForAppend.modelScope,
 		modelResponseAliases: input.deps.config.modelResponseAliases,
 		interactive: input.ctx.hasUI,
@@ -1797,6 +1800,7 @@ async function resumeExternalJobFollowUp(input: {
 			parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 			currentModelProvider: parentModel?.provider,
 			currentModel: parentModel,
+			scopedModelIds: scopedModelIdsFromContext(input.ctx),
 			modelScope: input.modelScope,
 			modelResponseAliases: input.deps.config.modelResponseAliases,
 			interactive: input.ctx.hasUI,
@@ -2066,6 +2070,7 @@ async function resumeAsyncRun(input: {
 				parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 				currentModelProvider: parentModel?.provider,
 				currentModel: parentModel,
+				scopedModelIds: scopedModelIdsFromContext(input.ctx),
 				modelScope,
 				modelResponseAliases: input.deps.config.modelResponseAliases,
 				interactive: input.ctx.hasUI,
@@ -2193,6 +2198,7 @@ async function resumeAsyncRun(input: {
 			parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 			currentModelProvider: parentModel?.provider,
 			currentModel: parentModel,
+			scopedModelIds: scopedModelIdsFromContext(input.ctx),
 			modelScope,
 			// Absence in the retained contract is meaningful; never acquire current aliases.
 			modelResponseAliases: recoveryDescriptor ? recoveryDescriptor.modelResponseAliases : foregroundContract?.modelResponseAliases,
@@ -3147,6 +3153,7 @@ function resolveStaticLaunchSummary(input: {
 	explicitModel?: string;
 	agents: AgentConfig[];
 	parentModel?: ParentModel;
+	scopedModelIds?: string[];
 	availableModels: ModelInfo[];
 	currentProvider?: string;
 	modelScope?: ModelScopeConfig;
@@ -3154,7 +3161,7 @@ function resolveStaticLaunchSummary(input: {
 }): StaticLaunchSummary {
 	const agentConfig = input.agents.find((agent) => agent.name === input.agent);
 	const externalRunner = agentConfig?.runner?.type === "external-cli" || agentConfig?.runner?.type === "external-job";
-	const modelScopes = resolveModelScopesForAgent(input.modelScope, input.agent, input.parentModel);
+	const modelScopes = resolveModelScopesForAgent(input.modelScope, input.agent, input.parentModel, input.scopedModelIds);
 	const model = externalRunner
 		? undefined
 		: resolveEffectiveSubagentModel(
@@ -3178,6 +3185,7 @@ function collectStaticLaunchSummaries(input: {
 	params: SubagentParamsLike;
 	agents: AgentConfig[];
 	parentModel?: ParentModel;
+	scopedModelIds?: string[];
 	availableModels: ModelInfo[];
 	currentProvider?: string;
 	modelScope?: ModelScopeConfig;
@@ -3190,6 +3198,7 @@ function collectStaticLaunchSummaries(input: {
 		explicitModel,
 		agents: input.agents,
 		parentModel: input.parentModel,
+		scopedModelIds: input.scopedModelIds,
 		availableModels: input.availableModels,
 		currentProvider: input.currentProvider,
 		modelScope: input.modelScope,
@@ -3476,6 +3485,7 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		parentSessionId: data.parentPiSessionId,
 		currentModelProvider: parentModel?.provider,
 		currentModel: parentModel,
+		scopedModelIds: data.scopedModelIds,
 		modelScope: data.modelScope,
 		modelResponseAliases: deps.config.modelResponseAliases,
 		interactive: ctx.hasUI,
@@ -3510,7 +3520,7 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		if ((a.runner?.type === "external-cli" || a.runner?.type === "external-job") && (params.fast ?? a.fast) === true) {
 			return buildRequestedModeError(params, `Agent '${a.name}' uses runner.type='${a.runner.type}' and does not support fast mode.`);
 		}
-		const modelScopes = resolveModelScopesForAgent(data.modelScope, a.name, parentModel);
+		const modelScopes = resolveModelScopesForAgent(data.modelScope, a.name, parentModel, data.scopedModelIds);
 		const modelOrigin = resolveModelOrigin({
 			storedOrigin: params.modelOrigin as ModelOrigin | undefined,
 			explicitModel: params.model as string | undefined,
@@ -4028,7 +4038,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const parentModel = data.parentModel;
 	const currentProvider = parentModel?.provider;
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map(toModelInfo);
-	const modelScopes = resolveModelScopesForAgent(data.modelScope, agentConfig.name, parentModel);
+	const modelScopes = resolveModelScopesForAgent(data.modelScope, agentConfig.name, parentModel, data.scopedModelIds);
 	let task = typeof params.task === "string" ? params.task : "";
 	const modelOrigin = resolveModelOrigin({
 		storedOrigin: params.modelOrigin as ModelOrigin | undefined,
@@ -7534,6 +7544,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			contextPolicy,
 			modelScope,
 			parentModel: requestParentModel,
+			scopedModelIds: scopedModelIdsFromContext(ctx),
 			parentSessionId: requestSessionId,
 			parentPiSessionId: requestPiSessionId,
 			capabilityCeiling: intersectSubagentCapabilityCeilings(effectiveParams.capabilityCeiling, resolveCurrentSubagentCapabilityCeiling(requestSessionId)),
@@ -7625,6 +7636,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					params: effectiveParams,
 					agents,
 					parentModel: requestParentModel,
+					scopedModelIds: scopedModelIdsFromContext(ctx),
 					availableModels: ctx.modelRegistry.getAvailable().map(toModelInfo),
 					currentProvider: requestParentModel?.provider,
 					modelScope,

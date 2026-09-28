@@ -131,6 +131,64 @@ describe("resolveModelScopesForAgent", () => {
 	});
 });
 
+describe("expandReservedPatterns via resolveModelScopesForAgent", () => {
+	const parent = { provider: "anthropic", id: "claude-sonnet-4" };
+	const scopedIds = ["anthropic/claude-sonnet-4", "openai/gpt-5-mini"];
+
+	it("expands scoped to the full scoped-model snapshot", () => {
+		const [scope] = resolveModelScopesForAgent({ enforce: true, allow: ["scoped"] }, "worker", parent, scopedIds);
+		assert.deepEqual(scope.allow, scopedIds);
+	});
+
+	it("does not expand other patterns alongside scoped", () => {
+		const [scope] = resolveModelScopesForAgent({ enforce: true, allow: ["scoped", "anthropic/*"] }, "worker", parent, scopedIds);
+		assert.deepEqual(scope.allow, [...scopedIds, "anthropic/*"]);
+	});
+
+	it("expands scoped per agent scope", () => {
+		const [agent] = resolveModelScopesForAgent({ enforce: true, agents: { reviewer: { allow: ["scoped"] } } }, "reviewer", parent, scopedIds);
+		assert.deepEqual(agent.allow, scopedIds);
+	});
+
+	it("degrades scoped to the parent model when the snapshot is empty", () => {
+		const [empty] = resolveModelScopesForAgent({ enforce: true, allow: ["scoped"] }, "worker", parent, []);
+		const [missing] = resolveModelScopesForAgent({ enforce: true, allow: ["scoped"] }, "worker", parent, undefined);
+		const [inherit] = resolveModelScopesForAgent({ enforce: true, allow: ["inherit"] }, "worker", parent);
+		assert.deepEqual(empty.allow, ["anthropic/claude-sonnet-4"]);
+		assert.deepEqual(missing.allow, ["anthropic/claude-sonnet-4"]);
+		assert.deepEqual(empty.allow, inherit.allow);
+	});
+
+	it("keeps scoped literal when neither snapshot nor parent exists so enforcement fails closed", () => {
+		const [scope] = resolveModelScopesForAgent({ enforce: true, allow: ["scoped"] }, "worker", undefined, undefined);
+		const violation = checkModelScope("openai/gpt-5-mini", scope, "explicit");
+		assert.equal(violation?.severity, "error");
+		assert.deepEqual(violation?.allowedPatterns, ["scoped"]);
+		assert.match(violation?.message ?? "", /Allowed patterns: scoped\./);
+	});
+
+	it("leaves an unenforced unexpanded scoped token inert", () => {
+		const [scope] = resolveModelScopesForAgent({ enforce: false, allow: ["scoped"] }, "worker", undefined, undefined);
+		assert.equal(checkModelScope("openai/gpt-5-mini", scope, "explicit"), undefined);
+	});
+
+	it("matches thinking-suffixed models against scoped-expanded ids", () => {
+		const [scope] = resolveModelScopesForAgent({ enforce: true, allow: ["scoped"] }, "worker", undefined, scopedIds);
+		assert.equal(checkModelScope("openai/gpt-5-mini:high", scope, "explicit"), undefined);
+		const violation = checkModelScope("deepseek/deepseek-v4", scope, "explicit");
+		assert.equal(violation?.severity, "error");
+	});
+
+	it("summarizes the rendered pattern list for large scoped sets", () => {
+		const manyIds = Array.from({ length: 12 }, (_, i) => `prov/model-${i}`);
+		const [scope] = resolveModelScopesForAgent({ enforce: true, allow: ["scoped"] }, "worker", undefined, manyIds);
+		const violation = checkModelScope("other/model", scope, "explicit");
+		assert.match(violation?.message ?? "", /prov\/model-7, … \(12 patterns total\)/);
+		assert.doesNotMatch(violation?.message ?? "", /model-11/);
+		assert.deepEqual(violation?.allowedPatterns, manyIds);
+	});
+});
+
 describe("parseModelScopeConfig", () => {
 	const meta = { filePath: "~/.pi/agent/settings.json" };
 
