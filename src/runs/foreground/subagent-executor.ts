@@ -99,6 +99,7 @@ import { dismissRecoveredWorkflow } from "./async-dismiss-action.ts";
 import { promotePausedWorkflowIfSettled, reconcileDetachedWorkflowChildCompletion } from "./workflow-detach-reconcile.ts";
 import { reconcileAsyncRun } from "../background/stale-run-reconciler.ts";
 import { resolveAsyncRootResultPath, waitForImportedAsyncRoot } from "../background/chain-root-attachment.ts";
+import { awaitExistingAsyncRun, claimWorkflowAwaitedResult } from "../background/await-async-run.ts";
 import { fallbackResultPayloadPathForSessionRun, removeResultIndex, resultFilePath, writeAsyncResultFile } from "../background/result-files.ts";
 import { attachRootChildrenToSteps, createNestedRoute, findNestedControlResult, inheritedNestedParentAddressOf, inheritedNestedRouteOf, nestedRunScope, resolveNestedAsyncDir, retainNestedLookupRoute, snapshotNestedEventFiles, updateForegroundNestedProjection, writeNestedControlRequest, writeNestedEvent, type NestedParentAddress, type NestedRoute, type NestedRunResolutionScope } from "../shared/nested-events.ts";
 import type { ChildRuntimeConfig } from "../shared/child-runtime-config.ts";
@@ -122,6 +123,7 @@ import { getInspectorPlugins } from "../../inspectors/plugins.ts";
 import { handleHerdrProjectPaneAction, HERDR_PROJECT_PANE_ACTIONS } from "../../inspectors/herdr/project-panes.ts";
 import { previewSimpleWorkflowRun, runWorkflowScript, validateWorkflowScript, WorkflowScriptError, type WorkflowChildSettledNotification, type WorkflowLanePlan, type WorkflowReceiptResumeReference, type WorkflowScriptChildResult, type WorkflowScriptTraceEntry, type WorkflowSteerOptions, type WorkflowSteerResult } from "../../workflows/scripted-workflow.ts";
 import { formatIncrementalChildCompletion, incrementalChildCompletionTriggersTurn } from "../background/notify.ts";
+import { appendWorkflowChildJournal, findWorkflowReuseSource, matchWorkflowReuse, workflowChildFingerprint, workflowScriptDigest, workflowStopCause, WORKFLOW_RUNTIME_REPLACED_RELAUNCH_NOTICE } from "../../workflows/workflow-reuse.ts";
 import { executeWorkflowHostCommand, resolveWorkflowHostOutputClaimPath, type WorkflowHostCommandParams, type WorkflowHostCommandResult } from "../../workflows/host-command.ts";
 import { buildWorkflowReceipt, readWorkflowReceipt, workflowReceiptPath, resolveWorkflowReceiptResumeEntry, writeWorkflowReceipt, type WorkflowReceipt, type WorkflowReceiptState } from "../../workflows/workflow-receipt.ts";
 import { upsertHostStep, validHostStepNodes } from "../shared/host-step-status.ts";
@@ -2300,54 +2302,19 @@ async function resumeAsyncRun(input: {
 	if (input.params.workflowParentRunId !== undefined && result.details.asyncDir) {
 		const asyncDir = result.details.asyncDir;
 		const resultPath = workflowAwaitedAsyncResultPath(asyncDir);
-		const stopOnAbort = () => { stopAsyncRun(input.deps.state, revivedId, input.deps.kill, { asyncDir, resolvedId: revivedId }); };
-		if (input.signal?.aborted) stopOnAbort();
-		else input.signal?.addEventListener("abort", stopOnAbort, { once: true });
+		const stopListener = stopAwaitedAsyncChildOnAbort(input.signal, input.deps.state, revivedId, asyncDir, input.deps.kill);
 		let completed: Awaited<ReturnType<typeof waitForImportedAsyncRoot>>;
 		try {
-			completed = await waitForImportedAsyncRoot({ runId: revivedId, asyncDir, resultPath, index: 0 });
+			completed = await waitForImportedAsyncRoot({ runId: revivedId, asyncDir, resultPath, index: 0 }, {
+				shouldAbort: () => input.signal?.aborted === true,
+				timeoutMessage: "Workflow stopped before async child completed.",
+			});
 		} finally {
-			input.signal?.removeEventListener("abort", stopOnAbort);
+			stopListener.remove();
 		}
-		if (completed.importedPublication) removeWorkflowAwaitedResult(asyncDir, resultPath, revivedId, completed.importedPublication);
-		emitWorkflowAwaitedChildComplete(input.deps.pi, input.deps.state, revivedId, asyncDir, input.params.workflowParentRunId, completed);
-		const usage = importedAsyncRootUsage(completed);
-		const childResult: SingleResult = {
-			index: 0,
-			agent: completed.agent,
-			...(completed.sessionName ? { sessionName: completed.sessionName } : {}),
-			task: effectiveFollowUp,
-			exitCode: completed.exitCode,
-			usage,
-			finalOutput: completed.output,
-			outputState: completed.output.trim() ? "present" : "absent",
-			...(completed.error ? { error: completed.error } : {}),
-			...(completed.timedOut ? { timedOut: true } : {}),
-			...(completed.stopped ? { stopped: true } : {}),
-			...(completed.sessionFile ? { sessionFile: completed.sessionFile } : {}),
-			...(completed.model ? { model: completed.model } : {}),
-			...(completed.requestedModel ? { requestedModel: completed.requestedModel } : {}),
-			...(completed.contextOverflow ? { contextOverflow: true } : {}),
-			...(completed.structuredOutput !== undefined ? { structuredOutput: completed.structuredOutput } : {}),
-			...(completed.structuredOutputPath ? { structuredOutputPath: completed.structuredOutputPath } : {}),
-			...(completed.structuredOutputSchemaPath ? { structuredOutputSchemaPath: completed.structuredOutputSchemaPath } : {}),
-			...(completed.acceptance ? { acceptance: completed.acceptance } : {}),
-			...(completed.artifactPaths ? { artifactPaths: completed.artifactPaths } : {}),
-			...(completed.savedOutputPath ? { savedOutputPath: completed.savedOutputPath } : {}),
-			...(completed.outputSaveError ? { outputSaveError: completed.outputSaveError } : {}),
-			...(completed.transcriptPath ? { transcriptPath: completed.transcriptPath } : {}),
-			...(completed.transcriptError ? { transcriptError: completed.transcriptError } : {}),
-		};
-		return {
-			content: [{ type: "text", text: completed.success ? completed.output || completed.error || `Revived ${target.source} subagent ${revivedId} completed without output.` : completed.error || completed.output || `Revived ${target.source} subagent ${revivedId} completed without output.` }],
-			...(completed.success ? {} : { isError: true }),
-			details: {
-				...result.details,
-				runId: revivedId,
-				results: [childResult],
-				...(target.launchContractDigest ? { sourceLaunchContractDigest: target.launchContractDigest } : {}),
-			},
-		};
+		const details: Details = { ...result.details };
+		if (target.launchContractDigest) details.sourceLaunchContractDigest = target.launchContractDigest;
+		return importWorkflowAwaitedChildResult(completed, { runId: revivedId, asyncDir, resultPath, task: effectiveFollowUp, parentWorkflowRunId: input.params.workflowParentRunId, details, emptyOutputText: `Revived ${target.source} subagent ${revivedId} completed without output.`, state: input.deps.state, pi: input.deps.pi });
 	}
 	const revivedTarget = intercomBridge.active ? resolveSubagentIntercomTarget(revivedId, target.agent, 0) : undefined;
 	const sourceLabel = target.source;
@@ -3385,28 +3352,13 @@ function emitWorkflowAwaitedChildComplete(
 	});
 }
 
-async function waitForWorkflowAsyncSingleResult(
-	params: SubagentParamsLike,
-	launchResult: AgentToolResult<Details>,
-	options: { runId: string; task: string; signal?: AbortSignal; state: SubagentState; pi: ExtensionAPI; kill?: ExecutorDeps["kill"] },
-): Promise<AgentToolResult<Details>> {
-	if (params.workflowAwaitAsync !== true || !launchResult.details.asyncDir) return launchResult;
-	const asyncDir = launchResult.details.asyncDir;
-	const resultPath = workflowAwaitedAsyncResultPath(asyncDir);
-	const stopOnAbort = () => { stopAsyncRun(options.state, options.runId, options.kill, { asyncDir, resolvedId: options.runId }); };
-	if (options.signal?.aborted) stopOnAbort();
-	else options.signal?.addEventListener("abort", stopOnAbort, { once: true });
-	let completed: Awaited<ReturnType<typeof waitForImportedAsyncRoot>>;
-	try {
-		completed = await waitForImportedAsyncRoot({ runId: options.runId, asyncDir, resultPath, index: 0 }, omitUndefinedProperties({
-			shouldAbort: () => options.signal?.aborted === true,
-			timeoutMessage: "Workflow stopped before async child completed.",
-		}));
-	} finally {
-		options.signal?.removeEventListener("abort", stopOnAbort);
-	}
-	if (completed.importedPublication) removeWorkflowAwaitedResult(asyncDir, resultPath, options.runId, completed.importedPublication);
-	emitWorkflowAwaitedChildComplete(options.pi, options.state, options.runId, asyncDir, params.workflowParentRunId, completed);
+/** Consumes an awaited workflow child's published result: clears the payload, announces completion, and builds the tool result. */
+function importWorkflowAwaitedChildResult(
+	completed: Awaited<ReturnType<typeof waitForImportedAsyncRoot>>,
+	options: { runId: string; asyncDir: string; resultPath: string; task: string; parentWorkflowRunId: string | undefined; details: Details; emptyOutputText?: string; state: SubagentState; pi: ExtensionAPI },
+): AgentToolResult<Details> {
+	if (completed.importedPublication) removeWorkflowAwaitedResult(options.asyncDir, options.resultPath, options.runId, completed.importedPublication);
+	emitWorkflowAwaitedChildComplete(options.pi, options.state, options.runId, options.asyncDir, options.parentWorkflowRunId, completed);
 	const usage = importedAsyncRootUsage(completed);
 	const childResult: SingleResult = omitUndefinedProperties({
 		index: 0,
@@ -3435,14 +3387,43 @@ async function waitForWorkflowAsyncSingleResult(
 		...(completed.transcriptError ? { transcriptError: completed.transcriptError } : {}),
 	});
 	return {
-		content: [{ type: "text", text: completed.success ? completed.output || completed.error || `Async workflow child ${options.runId} completed without output.` : completed.error || completed.output || `Async workflow child ${options.runId} completed without output.` }],
+		content: [{ type: "text", text: (completed.success ? completed.output || completed.error : completed.error || completed.output) || (options.emptyOutputText ?? `Async workflow child ${options.runId} completed without output.`) }],
 		...(completed.success ? {} : { isError: true }),
 		details: {
-			...launchResult.details,
+			...options.details,
 			runId: options.runId,
 			results: [childResult],
 		},
 	};
+}
+
+// A replaced runtime leaves the child running so a relaunch of the workflow can re-attach to it.
+function stopAwaitedAsyncChildOnAbort(signal: AbortSignal | undefined, state: SubagentState, runId: string, asyncDir: string, kill?: ExecutorDeps["kill"]): { remove: () => void } {
+	const stopOnAbort = () => { if (!workflowStopCause(signal?.reason)) stopAsyncRun(state, runId, kill, { asyncDir, resolvedId: runId }); };
+	if (signal?.aborted) stopOnAbort();
+	else signal?.addEventListener("abort", stopOnAbort, { once: true });
+	return { remove: () => signal?.removeEventListener("abort", stopOnAbort) };
+}
+
+async function waitForWorkflowAsyncSingleResult(
+	params: SubagentParamsLike,
+	launchResult: AgentToolResult<Details>,
+	options: { runId: string; task: string; signal?: AbortSignal; state: SubagentState; pi: ExtensionAPI; kill?: ExecutorDeps["kill"] },
+): Promise<AgentToolResult<Details>> {
+	if (params.workflowAwaitAsync !== true || !launchResult.details.asyncDir) return launchResult;
+	const asyncDir = launchResult.details.asyncDir;
+	const resultPath = workflowAwaitedAsyncResultPath(asyncDir);
+	const stopListener = stopAwaitedAsyncChildOnAbort(options.signal, options.state, options.runId, asyncDir, options.kill);
+	let completed: Awaited<ReturnType<typeof waitForImportedAsyncRoot>>;
+	try {
+		completed = await waitForImportedAsyncRoot({ runId: options.runId, asyncDir, resultPath, index: 0 }, omitUndefinedProperties({
+			shouldAbort: () => options.signal?.aborted === true,
+			timeoutMessage: "Workflow stopped before async child completed.",
+		}));
+	} finally {
+		stopListener.remove();
+	}
+	return importWorkflowAwaitedChildResult(completed, { runId: options.runId, asyncDir, resultPath, task: options.task, parentWorkflowRunId: params.workflowParentRunId, details: launchResult.details, state: options.state, pi: options.pi });
 }
 
 async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details> | null> {
@@ -5455,6 +5436,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				const workflowCapabilityCeiling = intersectSubagentCapabilityCeilings(requestParams.capabilityCeiling, resolveCurrentSubagentCapabilityCeiling(currentSessionId));
 				const completionOwnerId = deps.state.completionOwnerId ?? currentCompletionOwnerId();
 				deps.state.completionOwnerId = completionOwnerId;
+				const workflowScriptSourceDigest = workflowScriptDigest(requestParams.workflowScript);
+				const workflowReuseSource = findWorkflowReuseSource(DIRS.async, currentSessionId, workflowScriptSourceDigest, workflowArgsDigest);
+				const workflowRunEvidence: Pick<NonNullable<AsyncStatus["workflow"]>, "args" | "argsDigest" | "scriptDigest" | "reusedFrom" | "stopCause"> = { ...workflowArgsEvidence, scriptDigest: workflowScriptSourceDigest };
+				if (workflowReuseSource) workflowRunEvidence.reusedFrom = workflowReuseSource.runId;
+				const workflowJournalFingerprints = new Map<string, string>();
 				try {
 					fs.mkdirSync(asyncDir, { recursive: true });
 					writeRunFanoutBudgetDescriptor(asyncDir, workflowFanoutBudget);
@@ -5486,7 +5472,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					...(workflowCapabilityCeiling ? { admissionCapabilityCeiling: workflowCapabilityCeiling } : {}),
 					steps: [],
 					...(workflowPreflight ? { preflight: workflowPreflight } : {}),
-					workflow: { trace: [], emits: [], console: [], ...(workflowArgsEvidence ?? {}), ...(workflowResource ? { resource: workflowResource.provenance } : {}) },
+					workflow: { trace: [], emits: [], console: [], ...workflowRunEvidence, ...(workflowResource ? { resource: workflowResource.provenance } : {}) },
 					workflowChildren: workflowChildSummary({ parentToolCallId: toolCallId, workflowRunId, workflowState: "running", inventoryComplete: false }),
 					runFanoutBudget: getRunFanoutBudgetSnapshot(workflowFanoutBudget),
 				};
@@ -5978,6 +5964,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								workflowSteps.set(entry.key, step);
 							}
 							const projectedStep = workflowSteps.get(entry.key);
+							if (entry.reused && projectedStep) projectedStep.reused = true;
 							if (entry.state === "stopped" && projectedStep) {
 								appendWorkflowEvent({
 									type: "subagent.child-status",
@@ -6011,7 +5998,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							timeoutMs: timeout,
 							signal: controller.signal,
 							continueAfterAbortWhenChildrenSettled: (abortError) => {
-								if (abortError.message !== "Workflow stopped because the extension session was replaced or reloaded.") return false;
+								if (!workflowStopCause(abortError)) return false;
 								const activeAsyncChild = [...(deps.state.asyncJobs?.values() ?? [])].some((job) => job.parentWorkflowRunId === workflowRunId && (job.status === "queued" || job.status === "running"));
 								const activeForegroundChild = [...deps.state.foregroundControls.values()].some((control) => control.parentWorkflowRunId === workflowRunId && (control.activeChildren?.size ?? 0) > 0);
 								return !activeAsyncChild && !activeForegroundChild;
@@ -6023,6 +6010,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							...(workflowState ? { state: workflowState } : {}),
 							onTrace: updateTrace,
 							onChildSettled: (notification) => {
+								const journalFingerprint = workflowJournalFingerprints.get(notification.childKey);
+								if (journalFingerprint) appendWorkflowChildJournal(asyncDir, { type: "settle", key: notification.childKey, fingerprint: journalFingerprint, result: notification.result });
 								appendWorkflowEvent({
 									type: "subagent.workflow.child_settled",
 									childKey: notification.childKey,
@@ -6074,6 +6063,32 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								appendWorkflowEvent({ type: "subagent.workflow.emit", value: emits.at(-1) });
 							},
 							launch: async (key, childParams, workflowSignal, admission) => {
+								const journalFingerprint = workflowJournalFingerprints.get(key) ?? workflowChildFingerprint(childParams);
+								workflowJournalFingerprints.set(key, journalFingerprint);
+								const priorChild = workflowReuseSource ? matchWorkflowReuse(workflowReuseSource, key, journalFingerprint) : undefined;
+								if (priorChild?.kind === "settled") {
+									if (priorChild.result.runId) workflowChildRunIds.set(key, priorChild.result.runId);
+									return { ...priorChild.result, reused: true };
+								}
+								if (priorChild?.kind === "started") {
+									// The previous run's awaited async child may still be running: wait for that exact run
+									// instead of launching again. Journal it first so another reload can re-attach too.
+									const priorRunId = priorChild.runId;
+									const priorAsyncDir = path.join(DIRS.async, priorRunId);
+									appendWorkflowChildJournal(asyncDir, { type: "start", key, fingerprint: journalFingerprint, runId: priorRunId });
+									const stopListener = stopAwaitedAsyncChildOnAbort(workflowSignal, deps.state, priorRunId, priorAsyncDir, deps.kill);
+									const reattached = await awaitExistingAsyncRun(priorAsyncDir, priorRunId, workflowSignal).finally(stopListener.remove);
+									const claimedPath = reattached.status === "settled" ? claimWorkflowAwaitedResult(priorAsyncDir, workflowRunId) : undefined;
+									if (reattached.status === "settled" && claimedPath) {
+										const imported = importWorkflowAwaitedChildResult(reattached.result, { runId: priorRunId, asyncDir: priorAsyncDir, resultPath: claimedPath, task: typeof childParams.task === "string" ? childParams.task : "", parentWorkflowRunId: workflowReuseSource?.runId, details: { mode: "single", asyncId: priorRunId, asyncDir: priorAsyncDir, results: [] }, state: deps.state, pi: deps.pi });
+										const reattachedResult = workflowChildResult(key, imported, childParams, deps.state);
+										// Like a settled journal match: only a successful child is reused; a failed or stopped one launches fresh.
+										if (reattachedResult.ok) {
+											workflowChildRunIds.set(key, priorRunId);
+											return { ...reattachedResult, reused: true };
+										}
+									}
+								}
 								if (workflowUsageBudget.budget && childParams.async === true) return workflowChildResult(key, buildRequestedModeError(childParams as SubagentParamsLike, "workflow usageBudget does not support async runs.run launches."), childParams, deps.state);
 								const budgetState = usageBudgetState(workflowUsageBudget.budget, sumResultsCost(workflowResults));
 								if (budgetState?.exhausted) return workflowChildResult(key, buildRequestedModeError(childParams as SubagentParamsLike, usageBudgetExceededMessage(budgetState)), childParams, deps.state, { state: "partial", reason: "budget_exhausted" });
@@ -6098,6 +6113,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 									preparedChildParams = childRequest;
 									if (workflowUsageBudget.budget) workflowOwnedUsageBudgets.set(childRequest, workflowUsageBudget.budget);
 									workflowLaunchObservers.set(childRequest, (launch) => {
+										if (launch.runId) appendWorkflowChildJournal(asyncDir, { type: "start", key, fingerprint: journalFingerprint, runId: launch.runId });
 										const step = status.steps?.find((candidate) => candidate.workflowKey === key);
 										if (step) {
 											step.agent = launch.agent;
@@ -6185,7 +6201,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						const workflowUsage = sumResultsUsage(workflowResults);
 						settleWorkflowSteerInbox("complete");
 						const workflowChildren = workflowChildSummary({ parentToolCallId: toolCallId, workflowRunId, workflowState: "completed", inventoryComplete: true, trace: workflow.trace, children: workflow.children, steps: status.steps });
-						status = { ...status, state: "complete", endedAt: Date.now(), workflow: { value: workflow.value, trace: finalPreflightTrace, emits: workflow.emits, console: workflow.console, ...(workflowArgsEvidence ?? {}), ...(workflowResource ? { resource: workflowResource.provenance } : {}), ...(finalPreflightWarnings.length ? { preflightWarnings: finalPreflightWarnings } : {}) }, workflowChildren, totalTokens: { input: workflowUsage.input, output: workflowUsage.output, total: workflowUsage.input + workflowUsage.output }, totalCost: sumResultsCost(workflowResults) };
+						status = { ...status, state: "complete", endedAt: Date.now(), workflow: { value: workflow.value, trace: finalPreflightTrace, emits: workflow.emits, console: workflow.console, ...workflowRunEvidence, ...(workflowResource ? { resource: workflowResource.provenance } : {}), ...(finalPreflightWarnings.length ? { preflightWarnings: finalPreflightWarnings } : {}) }, workflowChildren, totalTokens: { input: workflowUsage.input, output: workflowUsage.output, total: workflowUsage.input + workflowUsage.output }, totalCost: sumResultsCost(workflowResults) };
 						const receipt = terminalWorkflowReceipt(workflowRunId, "complete", workflow.children, workflowChildren, undefined, validHostStepNodes(status.workflowGraph), workflowResource?.provenance, workflowArgsDigest);
 						delete status.workflowReceiptPath;
 						let workflowReceipt: { path: string; receipt: WorkflowReceipt } | undefined;
@@ -6204,6 +6220,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					} catch (error) {
 						const partial = error instanceof WorkflowScriptError ? error.partial : { trace: [], emits: [], console: [], children: [] };
 						const stopped = controller.signal.aborted;
+						const stopCause = stopped ? workflowStopCause(controller.signal.reason) : undefined;
+						if (stopCause) workflowRunEvidence.stopCause = stopCause;
 						const detachedChildKeys = new Set(partial.children.filter((child) => child.detached).map((child) => child.key));
 						const hasRealFailedChild = partial.children.some((child) => !child.ok && child.state !== "running" && !child.detached);
 						const pauseForDetached = !stopped && error instanceof WorkflowScriptError && error.errorKind === "detached-child" && detachedChildKeys.size > 0 && !hasRealFailedChild;
@@ -6224,7 +6242,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						const workflowChildren = workflowChildSummary({ parentToolCallId: toolCallId, workflowRunId, workflowState, inventoryComplete: true, trace: partial.trace, children: partial.children, steps: status.steps });
 						const finalPreflightWarnings = workflowPreflightWarnings(workflowPreflight, partial.trace, { settled: true });
 						const finalPreflightTrace = annotateWorkflowPreflightTrace(partial.trace, workflowPreflight);
-						status = compactOptional<AsyncStatus>({ ...status, state, stopped: stopped || undefined, activityState: pauseForDetached || status.activityState === "needs_attention" ? "needs_attention" : undefined, error: workflowFailureMessage(error, workflowRunId, partial.children), endedAt: Date.now(), workflow: { trace: finalPreflightTrace, emits: partial.emits, console: partial.console, ...(error instanceof WorkflowScriptError && error.errorKind ? { failureKind: error.errorKind } : {}), ...(workflowArgsEvidence ?? {}), ...(workflowResource ? { resource: workflowResource.provenance } : {}), ...(finalPreflightWarnings.length ? { preflightWarnings: finalPreflightWarnings } : {}) }, workflowChildren });
+						status = compactOptional<AsyncStatus>({ ...status, state, stopped: stopped || undefined, activityState: pauseForDetached || status.activityState === "needs_attention" ? "needs_attention" : undefined, error: workflowFailureMessage(error, workflowRunId, partial.children), endedAt: Date.now(), workflow: { trace: finalPreflightTrace, emits: partial.emits, console: partial.console, ...(error instanceof WorkflowScriptError && error.errorKind ? { failureKind: error.errorKind } : {}), ...workflowRunEvidence, ...(workflowResource ? { resource: workflowResource.provenance } : {}), ...(finalPreflightWarnings.length ? { preflightWarnings: finalPreflightWarnings } : {}) }, workflowChildren });
 						if (pauseForDetached) {
 							const promoted = promotePausedWorkflowIfSettled(status);
 							if (promoted) status = promoted;
@@ -6233,7 +6251,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						const errorPreview = status.error && status.error.length > 1_000 ? `${status.error.slice(0, 1_000)}… (truncated; full error: ${statusPath} (error))` : status.error;
 						const terminalSummary = `${status.state === "complete"
 							? "Workflow completed after detached child finished."
-							: errorPreview ?? (pauseForDetached ? "Workflow paused." : "Workflow failed.")}${workflowOutputPathMappingSummary(partial.children)}${finalPreflightWarnings.length ? ` ${finalPreflightWarnings.join(" ")}` : ""}`;
+							: errorPreview ?? (pauseForDetached ? "Workflow paused." : "Workflow failed.")}${stopCause ? ` ${WORKFLOW_RUNTIME_REPLACED_RELAUNCH_NOTICE}` : ""}${workflowOutputPathMappingSummary(partial.children)}${finalPreflightWarnings.length ? ` ${finalPreflightWarnings.join(" ")}` : ""}`;
 						const outputWarning = writeWorkflowAggregateOutput(workflowAggregateOutputPath, terminalSummary, producedChildOutputPaths);
 						const resultSummary = appendWorkflowOutputWarning(terminalSummary, outputWarning);
 						const receiptState: WorkflowReceiptState = status.state === "complete" ? "complete" : status.state === "paused" ? "paused" : status.state === "stopped" ? "stopped" : "failed";
