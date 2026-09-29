@@ -106,7 +106,7 @@ import { attachRootChildrenToSteps, createNestedRoute, findNestedControlResult, 
 import type { ChildRuntimeConfig } from "../shared/child-runtime-config.ts";
 import { resolveSubagentRunId, type ResolvedSubagentRunId } from "../background/run-id-resolver.ts";
 import { formatNestedRunStatusLines } from "../shared/nested-render.ts";
-import { isStoppableAsyncStatusStep, resolveAsyncStatusChild, stopStoppableAsyncStatusChildren } from "../shared/child-identity.ts";
+import { isStoppableAsyncStatusStep, resolveAsyncStatusChild } from "../shared/child-identity.ts";
 import { inspectSubagentStatus } from "../background/run-status.ts";
 import { getExternalJobProvider } from "../../api/external-job-provider.ts";
 import { externalJobFollowUpRequestDigest, externalJobFollowUpRequestId, externalJobFollowUpRunId, externalJobPromptDigest, externalJobStableJson } from "../shared/external-job-runner.ts";
@@ -3413,6 +3413,20 @@ function stopAwaitedAsyncChildOnAbort(signal: AbortSignal | undefined, state: Su
 	if (signal?.aborted) stopOnAbort();
 	else signal?.addEventListener("abort", stopOnAbort, { once: true });
 	return { remove: () => signal?.removeEventListener("abort", stopOnAbort) };
+}
+
+// Live workflow controls are keyed by the full run id; a stop id may be a prefix or the launch tool-call id.
+function resolveLiveWorkflowRunId(deps: ExecutorDeps, id: string): string | undefined {
+	const controllers = deps.state.workflowControllers;
+	if (!controllers?.size) return undefined;
+	if (controllers.has(id)) return id;
+	try {
+		const resolved = resolveSubagentRunId(id, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps) }));
+		return resolved?.kind === "async" && controllers.has(resolved.id) ? resolved.id : undefined;
+	} catch {
+		// The generic stop path resolves the id again and reports the error.
+		return undefined;
+	}
 }
 
 async function waitForWorkflowAsyncSingleResult(
@@ -7091,47 +7105,40 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			}
 			if (action === "stop") {
 				const targetRunId = paramsWithResolvedCwd.runId ?? paramsWithResolvedCwd.id;
-				const workflowController = targetRunId ? deps.state.workflowControllers?.get(targetRunId) : undefined;
-				if (workflowController && targetRunId) {
-					const stopChild = deps.state.workflowChildStops?.get(targetRunId);
-					if (paramsWithResolvedCwd.childId !== undefined) {
-						const workflowRunId = targetRunId;
-						const asyncJob = deps.state.asyncJobs.get(workflowRunId);
-						if (!asyncJob?.asyncDir) return { content: [{ type: "text", text: `Status file not found for async workflow '${workflowRunId}'.` }], isError: true, details: { mode: "management", results: [] } };
-						const status = readStatus(asyncJob.asyncDir);
-						if (!status) return { content: [{ type: "text", text: `Status file not found for async workflow '${workflowRunId}'.` }], isError: true, details: { mode: "management", results: [] } };
-						const resolution = resolveAsyncStatusChild(status, paramsWithResolvedCwd.childId);
-						if (!resolution.ok) return { content: [{ type: "text", text: resolution.message }], isError: true, details: { mode: "management", results: [] } };
-						if (!isStoppableAsyncStatusStep(resolution.child.step)) return { content: [{ type: "text", text: `Child '${paramsWithResolvedCwd.childId}' in async run '${targetRunId}' is ${resolution.child.step.status}; stop only supports pending or running children.` }], isError: true, details: { mode: "management", results: [] } };
-						if (!stopChild) return { content: [{ type: "text", text: `Workflow ${targetRunId} child stop is unavailable in this extension runtime.` }], isError: true, details: { mode: "management", results: [] } };
-						if (!stopChild(resolution.child.id, `Workflow child '${resolution.child.id}' stopped.`)) return { content: [{ type: "text", text: `Child '${paramsWithResolvedCwd.childId}' in workflow ${workflowRunId} is not available to stop.` }], isError: true, details: { mode: "management", results: [] } };
-						try {
-							fs.appendFileSync(path.join(asyncJob.asyncDir, "events.jsonl"), `${JSON.stringify({
-								type: "subagent.child-status",
-								version: 1,
-								runId: workflowRunId,
-								childId: resolution.child.id,
-								status: "stopping",
-								ts: Date.now(),
-								reason: "subagent-action",
-								source: "async",
-								stepIndex: resolution.child.index,
-								agent: resolution.child.step.agent,
-								...(resolution.child.step.runId ? { childRunId: resolution.child.step.runId } : {}),
-								...(resolution.child.step.workflowKey ? { workflowKey: resolution.child.step.workflowKey } : {}),
-								...(resolution.child.step.phase ? { phase: resolution.child.step.phase } : {}),
-								...(resolution.child.step.label ? { label: resolution.child.step.label } : {}),
-							} satisfies SubagentChildStatusEvent)}\n`, "utf-8");
-						} catch (error) {
-							console.error(`Failed to append child status event for workflow ${workflowRunId}:`, error);
-						}
-						return { content: [{ type: "text", text: `Stop requested for child ${resolution.child.id} in async workflow ${workflowRunId}.` }], details: { mode: "management", results: [] } };
+				// Whole-workflow stops reach stopAsyncRun below, which stops a live workflow in-process.
+				const workflowRunId = targetRunId && paramsWithResolvedCwd.childId !== undefined ? resolveLiveWorkflowRunId(deps, targetRunId) : undefined;
+				if (workflowRunId && paramsWithResolvedCwd.childId !== undefined) {
+					const stopChild = deps.state.workflowChildStops?.get(workflowRunId);
+					const asyncJob = deps.state.asyncJobs.get(workflowRunId);
+					if (!asyncJob?.asyncDir) return { content: [{ type: "text", text: `Status file not found for async workflow '${workflowRunId}'.` }], isError: true, details: { mode: "management", results: [] } };
+					const status = readStatus(asyncJob.asyncDir);
+					if (!status) return { content: [{ type: "text", text: `Status file not found for async workflow '${workflowRunId}'.` }], isError: true, details: { mode: "management", results: [] } };
+					const resolution = resolveAsyncStatusChild(status, paramsWithResolvedCwd.childId);
+					if (!resolution.ok) return { content: [{ type: "text", text: resolution.message }], isError: true, details: { mode: "management", results: [] } };
+					if (!isStoppableAsyncStatusStep(resolution.child.step)) return { content: [{ type: "text", text: `Child '${paramsWithResolvedCwd.childId}' in async run '${workflowRunId}' is ${resolution.child.step.status}; stop only supports pending or running children.` }], isError: true, details: { mode: "management", results: [] } };
+					if (!stopChild) return { content: [{ type: "text", text: `Workflow ${workflowRunId} child stop is unavailable in this extension runtime.` }], isError: true, details: { mode: "management", results: [] } };
+					if (!stopChild(resolution.child.id, `Workflow child '${resolution.child.id}' stopped.`)) return { content: [{ type: "text", text: `Child '${paramsWithResolvedCwd.childId}' in workflow ${workflowRunId} is not available to stop.` }], isError: true, details: { mode: "management", results: [] } };
+					try {
+						fs.appendFileSync(path.join(asyncJob.asyncDir, "events.jsonl"), `${JSON.stringify({
+							type: "subagent.child-status",
+							version: 1,
+							runId: workflowRunId,
+							childId: resolution.child.id,
+							status: "stopping",
+							ts: Date.now(),
+							reason: "subagent-action",
+							source: "async",
+							stepIndex: resolution.child.index,
+							agent: resolution.child.step.agent,
+							...(resolution.child.step.runId ? { childRunId: resolution.child.step.runId } : {}),
+							...(resolution.child.step.workflowKey ? { workflowKey: resolution.child.step.workflowKey } : {}),
+							...(resolution.child.step.phase ? { phase: resolution.child.step.phase } : {}),
+							...(resolution.child.step.label ? { label: resolution.child.step.label } : {}),
+						} satisfies SubagentChildStatusEvent)}\n`, "utf-8");
+					} catch (error) {
+						console.error(`Failed to append child status event for workflow ${workflowRunId}:`, error);
 					}
-					const asyncJob = deps.state.asyncJobs.get(targetRunId);
-					const status = asyncJob?.asyncDir ? readStatus(asyncJob.asyncDir) : undefined;
-					if (status) stopStoppableAsyncStatusChildren(status, stopChild, "Workflow stopped.");
-					workflowController.abort(new Error("Workflow stopped."));
-					return { content: [{ type: "text", text: `Stop requested for async workflow ${targetRunId}.` }], details: { mode: "management", results: [] } };
+					return { content: [{ type: "text", text: `Stop requested for child ${resolution.child.id} in async workflow ${workflowRunId}.` }], details: { mode: "management", results: [] } };
 				}
 				let resolved: ResolvedSubagentRunId | undefined;
 				if (paramsWithResolvedCwd.dir) {

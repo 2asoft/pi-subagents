@@ -1804,7 +1804,12 @@ Answer only from the supplied synthetic text.
 				workflowControllers.get(runId)!.abort(reason);
 				return await settled(runId);
 			};
-			return { launch, waitFor, settled, stopWhenStage2Starts };
+			const stopAction = (target: { id: string } | { dir: string }, sessionId?: string) => {
+				const ctx = makeMinimalCtx(tempDir);
+				if (sessionId) ctx.sessionManager.getSessionId = () => sessionId;
+				return executor.execute(`workflow-stop-${Date.now()}`, { action: "stop", ...target }, new AbortController().signal, undefined, ctx);
+			};
+			return { launch, waitFor, settled, stopWhenStage2Starts, stopAction };
 		};
 		const resultFileText = (runId: string) => fs.readFileSync(path.join(DIRS.results, `${runId}.json`), "utf-8");
 
@@ -1948,6 +1953,35 @@ Answer only from the supplied synthetic text.
 			assert.ok(stage2RunId);
 			const child = await waitForAsyncState(stage2RunId, (status) => terminalStates.includes(status.state ?? ""), 30_000);
 			assert.equal(child.state, "stopped");
+		});
+
+		it("stops the workflow and its async and foreground children when the stop action names it by id prefix or dir", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+			const { launch, waitFor, settled, stopAction } = setup();
+			for (const form of ["prefix", "dir"] as const) {
+				const nonce = `stop-action-${form}-${Date.now()}`;
+				mockPi.onCall({ matchArgIncludes: `Async child ${nonce}`, waitForPath: path.join(tempDir, `${nonce}.never`), output: "never" });
+				mockPi.onCall({ matchArgIncludes: `Foreground child ${nonce}`, hangUntilAbort: true });
+				const runId = await launch({ workflowScript: `await Promise.all([runs.run("bg", { agent: "bg", task: "Async child ${nonce}" }), runs.run("fg", { agent: "echo", task: "Foreground child ${nonce}" })]);` });
+				const running = await waitFor(runId, (status) => Boolean(status.steps?.find((step) => step.workflowKey === "bg" && step.async === true)?.runId)
+					&& status.steps?.find((step) => step.workflowKey === "fg")?.status === "running");
+				const bgRunId = running.steps?.find((step) => step.workflowKey === "bg")?.runId;
+				assert.ok(bgRunId);
+
+				const target = form === "prefix" ? { id: runId.slice(0, 8) } : { dir: path.join(DIRS.async, runId) };
+				const foreign = await stopAction(target, "other-session");
+				assert.equal(foreign.isError, true, `${form}: another session cannot stop the workflow`);
+				assert.equal(readStatusFile(runId).state, "running", form);
+				const result = await stopAction(target);
+				assert.equal(result.isError, undefined, result.content[0]?.text);
+				assert.equal(result.content[0]?.text, `Stop requested for async workflow ${runId}.`, form);
+				const stopped = await settled(runId);
+				assert.equal(stopped.state, "stopped", form);
+				assert.equal(stopped.steps?.find((step) => step.workflowKey === "fg")?.status, "stopped", form);
+				assert.doesNotMatch(resultFileText(runId), /relaunch the same workflowScript/, form);
+				assert.equal((await waitForAsyncState(bgRunId, (status) => terminalStates.includes(status.state ?? ""), 30_000)).state, "stopped", form);
+				const workflowStopRequests = path.join(DIRS.async, runId, "control", "stop-requests");
+				assert.deepEqual(fs.existsSync(workflowStopRequests) ? fs.readdirSync(workflowStopRequests) : [], [], `${form}: no unread stop request is left for the in-process workflow`);
+			}
 		});
 
 		it("stops a re-attached child when the user stops the relaunched workflow", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
