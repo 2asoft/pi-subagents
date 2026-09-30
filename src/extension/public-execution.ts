@@ -85,7 +85,7 @@ export function validateWorkflowCapacityOverrides(params: PublicSubagentExecutio
  * Enforce the public execution cutover before requests reach the executor.
  * Internal runs.run children and structured owned delegation bypass this boundary.
  */
-export function normalizePublicSubagentExecution<T extends PublicSubagentExecutionParams>(params: T): PublicSubagentExecutionNormalization<T> {
+export function normalizePublicSubagentExecution<T extends PublicSubagentExecutionParams>(params: T, options: { structuredWorkflows?: boolean } = {}): PublicSubagentExecutionNormalization<T> {
 	for (const field of ["resource", "resourceProvenance", "workflowResource", "workflowResourceProvenance", "workflowResourcePermit", "resourcePermit", "permit"] as const) {
 		if (Object.hasOwn(params, field) && (params as Record<string, unknown>)[field] !== undefined) {
 			return { ok: false, error: "Public execution does not accept workflow resource provenance or permit fields.", mode: params.action === undefined ? "workflow" : "management" };
@@ -173,9 +173,23 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 	if (params.resume !== undefined) {
 		return { ok: false, error: "Top-level resume execution is not available. Put resume on a workflow script runs.run/runs.all item.", mode: "workflow" };
 	}
-	const hasLegacyOrchestration = params.tasks !== undefined || params.chain !== undefined || params.parallel !== undefined || params.concurrency !== undefined || params.chainDir !== undefined;
+	// action: "chain"/"tasks"/"parallel" stays a legacy error even where top-level chain/tasks are accepted.
+	const legacyOrchestrationAction = ["parallel", "tasks", "chain"].includes(normalizedAction?.toLowerCase() ?? "");
+	const hasStructuredWorkflow = options.structuredWorkflows === true && !legacyOrchestrationAction && (params.tasks !== undefined || params.chain !== undefined);
+	const hasLegacyOrchestration = (!hasStructuredWorkflow && (params.tasks !== undefined || params.chain !== undefined)) || params.parallel !== undefined || params.concurrency !== undefined || params.chainDir !== undefined;
 	if (hasLegacyOrchestration) {
 		return { ok: false, error: `Legacy top-level chain and parallel inputs were removed; use a workflow script (${RAW_SCRIPT_FORMS}).`, mode: normalizedAction ? "management" : "workflow" };
+	}
+	if (hasStructuredWorkflow) {
+		if (params.tasks !== undefined && params.chain !== undefined) {
+			return { ok: false, error: "Pass either tasks or chain, not both.", mode: "workflow" };
+		}
+		const field = params.tasks !== undefined ? "tasks" : "chain";
+		// workflow and workflowScript were already rejected by the workflow-scripts feature check.
+		for (const [name, value] of [["action", params.action], ["agent", params.agent], ["step", params.step]] as const) {
+			if (value !== undefined) return { ok: false, error: `${field} cannot be combined with ${name}.`, mode: normalizedAction ? "management" : "workflow" };
+		}
+		return { ok: true, params };
 	}
 	if (normalizedAction !== undefined) {
 		const legacyAction = normalizedAction.toLowerCase();
