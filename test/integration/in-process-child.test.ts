@@ -372,6 +372,40 @@ describe("default child session factory", () => {
 		assert.deepEqual(flags, [true, true]);
 	});
 
+	it("registers the host codemode provider only for children allowed to select it", async () => {
+		const registrations: string[] = [];
+		const loaded: Array<{ names: string[]; ambient: boolean; paths: string[] }> = [];
+		const pi = Object.assign(stubPi(), {
+			createCodemodeExtension: () => (api: { registerTool: (tool: { name: string }) => void }) => api.registerTool({ name: "codemode" }),
+		});
+		pi.DefaultResourceLoader = class {
+			private options: ConstructorParameters<PiCodingAgentModule["DefaultResourceLoader"]>[0];
+			constructor(options: ConstructorParameters<PiCodingAgentModule["DefaultResourceLoader"]>[0]) { this.options = options; }
+			async reload() {
+				const factories = this.options.extensionFactories ?? [];
+				const codemode = factories.find((entry) => typeof entry !== "function" && entry.name === "codemode");
+				loaded.push({ names: factories.map((entry) => typeof entry === "function" ? "anonymous" : entry.name), ambient: !this.options.noExtensions, paths: this.options.additionalExtensionPaths ?? [] });
+				if (codemode && typeof codemode !== "function") await codemode.factory({ registerTool: (tool: { name: string }) => registrations.push(tool.name) } as never);
+			}
+		} as unknown as PiCodingAgentModule["DefaultResourceLoader"];
+		const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => pi });
+		const hooks = [{ name: "existing-child-hook", factory() {} }];
+		const requested = { ...stubLaunch, hooks, tools: ["codemode", "read"], extensionPaths: ["/provided.ts"], ambientExtensions: true };
+		await factory.create(requested);
+		await factory.create({ ...requested, tools: ["read"] });
+		await factory.create({ ...requested, runtime: { ...requested.runtime, capabilityCeiling: { version: 1, denyExtensions: true, sources: ["test"] } } });
+		await factory.create({ ...stubLaunch, excludeTools: ["codemode"] });
+		assert.deepEqual(registrations, ["codemode"]);
+		assert.deepEqual(loaded, [
+			{ names: ["existing-child-hook", "codemode"], ambient: true, paths: ["/provided.ts"] },
+			{ names: ["existing-child-hook"], ambient: true, paths: ["/provided.ts"] },
+			{ names: ["existing-child-hook"], ambient: true, paths: ["/provided.ts"] },
+			{ names: [], ambient: false, paths: [] },
+		]);
+		// The supported older SDK has no codemode export. Do not require it for ordinary children.
+		await createDefaultChildSessionFactory({ loadPiCodingAgent: async () => stubPi() }).create({ ...stubLaunch, tools: ["read"] });
+	});
+
 	it("runs the child prompt rewrite before ambient prompt capture without reordering ambient extensions", async () => {
 		const agentPrompt = '<active_agent name="remotion-editor"/>\n\neditor instructions';
 		const globalPath = path.join(process.env.HOME ?? process.env.USERPROFILE ?? process.cwd(), ".pi", "agent", "AGENTS.md");

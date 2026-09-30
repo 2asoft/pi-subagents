@@ -377,6 +377,16 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 			const themeKey = Symbol.for("@earendil-works/pi-coding-agent:theme");
 			const themeInitialized = Boolean((globalThis as Record<symbol, unknown>)[themeKey]);
 			if (!themeInitialized && typeof pi.initTheme === "function") pi.initTheme(settingsManager.getTheme());
+			// SDK sessions do not install Pi's CLI built-ins. Use the host's own
+			// codemode factory only when this child can select it; older Pi hosts
+			// without that factory retain the strict missing-tool diagnostic.
+			const createCodemodeExtension = (pi as PiCodingAgentModule & { createCodemodeExtension?: () => ChildHookExtension["factory"] }).createCodemodeExtension;
+			const codemode = typeof createCodemodeExtension === "function" &&
+				!launch.runtime.capabilityCeiling?.denyExtensions &&
+				(launch.tools === undefined || launch.tools.includes("codemode")) &&
+				!launch.excludeTools?.includes("codemode")
+				? [{ name: "codemode", factory: createCodemodeExtension(), replaceable: true }]
+				: [];
 			const loader = new pi.DefaultResourceLoader({
 				cwd: launch.cwd,
 				agentDir,
@@ -389,7 +399,7 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 				noThemes: true,
 				noContextFiles: launch.noContextFiles,
 				additionalExtensionPaths: builtinMcp ? [...launch.extensionPaths, "builtin:mcp"] : launch.extensionPaths,
-				extensionFactories: builtinMcp ? [...launch.hooks, builtinMcp] : launch.hooks,
+				extensionFactories: [...launch.hooks, ...codemode, ...(builtinMcp ? [builtinMcp] : [])],
 				extensionsOverride: prioritizeChildPromptRuntime,
 				...(launch.systemPrompt !== undefined ? { systemPrompt: launch.systemPrompt } : {}),
 				...(launch.appendSystemPrompt !== undefined ? { appendSystemPrompt: [launch.appendSystemPrompt] } : {}),
