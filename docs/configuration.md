@@ -78,11 +78,25 @@ Replace `YOUR_PROVIDER` with the resolved Pi provider ID. Keep the outgoing mode
 
 ## Tool activation lifecycle
 
-On Pi 0.86.1 or newer, a fresh unrestricted parent starts with `subagents_enable`, `bg_wait`, and `subagent_supervisor` active while `subagent` stays registered but inactive. Calling `subagents_enable({})` preserves unrelated active tools and exposes `subagent` on the next model request. It does not launch a child or infer authority from prompt keywords.
+On Pi 0.86.1 or newer, when the model can take a new tool mid-conversation (see [`toolActivation`](#toolactivation)), a fresh unrestricted parent starts with `subagents_enable`, `bg_wait`, and `subagent_supervisor` active while `subagent` stays registered but inactive. Calling `subagents_enable({})` preserves unrelated active tools and exposes `subagent` on the next model request. It does not launch a child or infer authority from prompt keywords. With other models, a fresh parent starts with `subagent`, `bg_wait`, and `subagent_supervisor` active and no `subagents_enable`.
 
-The recorded native `subagent` selection is restored on resume, reload, and tree navigation, so an activated session stays activated and a cold session stays cold. Older history without tool-selection records keeps eager `subagent` availability. If Pi's allowlist or exclusions remove the loader, the extension does not hide `subagent`; if they remove `subagent`, the loader reports it unavailable. Hosts whose extension API lacks `getAllTools`, `getActiveTools`, or `setActiveTools` keep eager behavior and log one compatibility warning. The host version is not read from disk, so in-process hosts such as pi-web activate the same way as the Pi CLI.
+The recorded native `subagent` selection is restored on resume, reload, and tree navigation, so an activated session stays activated and a cold session stays cold. With the default `toolActivation`, the recorded `subagents_enable` selection is restored too, so a session that started without the loader never gets it later. Older history without tool-selection records keeps eager `subagent` availability. If Pi's allowlist or exclusions remove the loader, the extension does not hide `subagent`; if they remove `subagent`, the loader reports it unavailable. Hosts whose extension API lacks `getAllTools`, `getActiveTools`, or `setActiveTools` keep eager behavior and log one compatibility warning. The host version is not read from disk, so in-process hosts such as pi-web activate the same way as the Pi CLI.
 
 Some providers fix the tool list for a whole prompt, for example bridges that hand Pi's tools to another agent SDK. There `subagent` appears only on the next user prompt, not the next model request. Start Pi with `--exclude-tools subagents_enable` to keep `subagent` active from the start.
+
+## `toolActivation`
+
+```json
+{ "toolActivation": "eager" }
+```
+
+Controls how a new parent session offers the `subagent` tool. The default is `"auto"`.
+
+- `"auto"`: a new session starts with the `subagents_enable` loader only when its model can take a new tool mid-conversation. Otherwise it starts with `subagent` active and no loader, because calling the loader on such a model makes Pi resend the conversation in a form the provider may not have cached. A model qualifies when its Pi `compat` settings set `supportsMidConvoSystemMessages: true` and, for its API, `supportsMidConvoToolChanges: true` (`anthropic-messages`), `supportsMidConvoToolAdditions: true` (`openai-completions`), or `supportsAdditionalTools: true` or `supportsToolSearch: true` (`openai-responses`, `openai-codex-responses`, `azure-openai-responses`). Other APIs, missing settings, and no model do not qualify.
+- `"dynamic"`: every new session starts with the loader, whatever the model. This was the behavior before `toolActivation` existed.
+- `"eager"`: the loader is not registered, so `subagent` is active from the first request, as with `--exclude-tools subagents_enable`. A resumed session that recorded the loader changes its tool list once on the next request.
+
+The choice is made at session start or tree navigation, and only for a session with no messages. Resumed sessions keep the tools they recorded, and switching models mid-session does not change them. `"auto"` avoids only the loader's cache miss; other tool-list or provider changes can still miss the cache. An active `subagent` sends its full schema on every request. An invalid value is a config error, not a fallback to the default. Restart Pi after changing it.
 
 ## `toolDescriptionMode`
 
