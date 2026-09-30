@@ -2646,9 +2646,8 @@ function progressiveHeaderLine(jobs: AsyncJobState[], theme: Theme, width: numbe
 	return truncLine(`${tone(glyph)} ${tone("Async agents")} ${theme.fg("dim", "·")} ${theme.fg("dim", parts.join(", ") || `${jobs.length} total`)}`, width);
 }
 
-function progressiveJobLine(job: AsyncJobState, theme: Theme, width: number, frame?: number, projection = buildWorkflowWidgetProjection(job)): string {
+function progressiveJobLine(job: AsyncJobState, theme: Theme, width: number, frame?: number, projection = buildWorkflowWidgetProjection(job), compactRows = job.mode === "workflow" ? compactWorkflowLaneRows(job, projection.checklist) : undefined): string {
 	const compactWorkflow = job.mode === "workflow";
-	const compactRows = compactWorkflow ? compactWorkflowLaneRows(job, projection.checklist) : undefined;
 	const stats = compactWorkflow ? compactWorkflowStats(job, compactRows ?? [], theme, projection) : widgetStats(job, theme, projection, true);
 	if (compactWorkflow) {
 		const bottleneck = compactWorkflowBottleneck(compactRows ?? [], job);
@@ -2685,9 +2684,9 @@ function progressiveHiddenLine(hiddenJobs: AsyncJobState[], theme: Theme, width:
 	return truncLine(theme.fg("dim", `  +${hiddenJobs.length} more${parts.length ? ` (${parts.join(", ")})` : ""}`), width);
 }
 
-function buildProgressiveWidgetLines(jobs: AsyncJobState[], theme: Theme, width: number, lockedRows: number, previousKeys: string[], frame?: number, projectionFor: WorkflowWidgetProjectionLookup = workflowWidgetProjectionLookup()): { lines: string[]; visibleJobKeys: string[] } {
+function buildProgressiveWidgetLines(jobs: AsyncJobState[], theme: Theme, width: number, lockedRows: number, previousKeys: string[], frame?: number, projectionFor: WorkflowWidgetProjectionLookup = workflowWidgetProjectionLookup()): { lines: string[]; visibleJobKeys: string[]; contentRows: number } {
 	const rowCount = Math.max(1, lockedRows);
-	if (rowCount === 1) return { lines: buildSingleLineWidgetLines(jobs, theme, width, frame), visibleJobKeys: [] };
+	if (rowCount === 1) return { lines: buildSingleLineWidgetLines(jobs, theme, width, frame), visibleJobKeys: [], contentRows: 1 };
 
 	const bodyRows = rowCount - 1;
 	let visibleJobKeys = selectProgressiveJobKeys(jobs, previousKeys, bodyRows);
@@ -2702,13 +2701,22 @@ function buildProgressiveWidgetLines(jobs: AsyncJobState[], theme: Theme, width:
 		hiddenJobs = jobs.filter((job) => !visibleJobKeys.includes(progressiveJobKey(job)));
 	}
 
-	const lines = [
-		progressiveHeaderLine(jobs, theme, width, frame),
-		...visibleJobs.map((job) => progressiveJobLine(job, theme, width, frame, projectionFor(job))),
-	];
+	// Rows left after every visible job line show the visible workflows' lanes.
+	let spareRows = rowCount - 1 - visibleJobs.length - (hiddenJobs.length > 0 ? 1 : 0);
+	const lines = [progressiveHeaderLine(jobs, theme, width, frame)];
+	for (const job of visibleJobs) {
+		const projection = projectionFor(job);
+		const laneRows = job.mode === "workflow" ? compactWorkflowLaneRows(job, projection.checklist) : undefined;
+		lines.push(progressiveJobLine(job, theme, width, frame, projection, laneRows));
+		if (!laneRows || projection.inlineFleetCovered) continue;
+		const shownLanes = laneRows.slice(0, Math.max(0, spareRows));
+		for (const row of shownLanes) lines.push(truncLine(compactWorkflowLaneLine(row, theme, "    ", frame), width));
+		spareRows -= shownLanes.length;
+	}
 	if (hiddenJobs.length > 0 && lines.length < rowCount) lines.push(progressiveHiddenLine(hiddenJobs, theme, width));
+	const contentRows = Math.min(lines.length, rowCount);
 	while (lines.length < rowCount) lines.push(" ");
-	return { lines: lines.slice(0, rowCount), visibleJobKeys };
+	return { lines: lines.slice(0, rowCount), visibleJobKeys, contentRows };
 }
 
 function collapsedWidgetLineBudget(rows: number): number {
@@ -2751,9 +2759,17 @@ function fitAdaptiveWidgetLines(jobs: AsyncJobState[], buildLines: () => string[
 	}
 
 	if (hasMatchingSession && widgetLayoutSession?.tier === "progressive" && widgetLayoutSession.lockedRows !== undefined) {
-		const rendered = buildProgressiveWidgetLines(jobs, theme, width, widgetLayoutSession.lockedRows, widgetLayoutSession.visibleJobKeys, frame, projectionFor);
-		widgetLayoutSession.visibleJobKeys = rendered.visibleJobKeys;
-		return rendered.lines;
+		const session = widgetLayoutSession;
+		const lockedRows = widgetLayoutSession.lockedRows;
+		let rendered = buildProgressiveWidgetLines(jobs, theme, width, lockedRows, session.visibleJobKeys, frame, projectionFor);
+		// A job that starts after a content-sized lock can be hidden while the cap has room: grow the lock, never shrink it.
+		const capRows = Math.min(availableRows, collapsedWidgetLineBudget(rows));
+		if (rendered.visibleJobKeys.length < jobs.length && lockedRows < capRows) {
+			rendered = buildProgressiveWidgetLines(jobs, theme, width, capRows, session.visibleJobKeys, frame, projectionFor);
+			session.lockedRows = Math.max(lockedRows, rendered.contentRows);
+		}
+		session.visibleJobKeys = rendered.visibleJobKeys;
+		return rendered.lines.slice(0, session.lockedRows);
 	}
 
 	const lines = buildLines();
@@ -2771,10 +2787,11 @@ function fitAdaptiveWidgetLines(jobs: AsyncJobState[], buildLines: () => string[
 		return buildSingleLineWidgetLines(jobs, theme, width, frame);
 	}
 
-	const lockedRows = Math.min(availableRows, collapsedWidgetLineBudget(rows));
-	const rendered = buildProgressiveWidgetLines(jobs, theme, width, lockedRows, [], frame, projectionFor);
+	// Lock to the rows the content fills so the fixed-height card has no blank padding.
+	const rendered = buildProgressiveWidgetLines(jobs, theme, width, Math.min(availableRows, collapsedWidgetLineBudget(rows)), [], frame, projectionFor);
+	const lockedRows = rendered.contentRows;
 	widgetLayoutSession = { expanded, rows, columns, tier: "progressive", lockedRows, visibleJobKeys: rendered.visibleJobKeys };
-	return rendered.lines;
+	return rendered.lines.slice(0, lockedRows);
 }
 
 const asyncWidgetUpdates = new WeakMap<ExtensionContext["ui"], (jobs: AsyncJobState[]) => void>();
