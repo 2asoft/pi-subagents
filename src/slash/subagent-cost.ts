@@ -187,7 +187,8 @@ export function collectSubagentCost(
 		if (parentUsage) addUsage(parent, parentUsage);
 		const details = detailsFromSessionEntry(entry);
 		if (!details) continue;
-		if (details.mode === "workflow" && details.runId) workflowRunIds.add(details.runId);
+		// Only async workflows persist a receipt file; foreground workflow child usage is already in results.
+		if (details.mode === "workflow" && details.runId && details.asyncId) workflowRunIds.add(details.runId);
 		// An async launch result has no child results; its usage lands in run artifacts.
 		else if (details.asyncId && details.results.length === 0) asyncRunIds.add(details.asyncId);
 		for (const result of details.results) {
@@ -247,7 +248,11 @@ export function collectSubagentCost(
 				if (!usage || !addChild({ ...ref, usage })) unresolvedAsyncChildren += 1;
 			}
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.error(`Failed to resolve async subagent usage for '${workflowRunId}':`, error);
+			// Without a receipt, a bg_wait completion cannot prove it reported every child (a stopped workflow may omit one).
+			unresolvedAsyncChildren += 1;
+			// A running workflow has no receipt yet; readWorkflowReceipt keeps the ENOENT as its cause.
+			const missing = (error as NodeJS.ErrnoException).code === "ENOENT" || ((error as Error).cause as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+			if (!missing) console.error(`Failed to resolve async subagent usage for '${workflowRunId}':`, error);
 		}
 	}
 
