@@ -911,7 +911,7 @@ export async function runSingleStepInner(
 		const adapterLaunch = step.runner.adapter === "codex-exec" || step.runner.adapter === "codex-exec-writer"
 			? resolveCodexExecLaunch({ adapter: step.runner.adapter, command: step.runner.command, asyncDir: path.dirname(ctx.outputFile), stepIndex: ctx.flatIndex })
 			: step.runner.adapter === "claude-code" || step.runner.adapter === "claude-code-writer"
-				? resolveClaudeCodeLaunch({ adapter: step.runner.adapter, command: step.runner.command })
+				? resolveClaudeCodeLaunch({ adapter: step.runner.adapter, command: step.runner.command, overrideArgs: step.claudeCodeOverrideArgs })
 				: step.runner.adapter === "cursor-agent" || step.runner.adapter === "cursor-agent-writer"
 					? resolveCursorAgentLaunch({ adapter: step.runner.adapter, command: step.runner.command, cwd: externalCwd, asyncDir: path.dirname(ctx.outputFile), stepIndex: ctx.flatIndex })
 				: undefined;
