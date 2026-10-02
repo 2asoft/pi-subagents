@@ -325,7 +325,7 @@ export function resolvePiLaunchToolPlan(
 	const ceilingFilteredBuiltinTools =
 		input.tools === undefined
 			? allowedToolSet
-				? [...allowedToolSet]
+				? [...allowedToolSet].filter((tool) => tool !== "subagent_command")
 				: []
 			: (input.requireReadTool &&
 				requestedBuiltinTools.length > 0 &&
@@ -384,7 +384,9 @@ export function resolvePiLaunchToolPlan(
 		input.tools !== undefined ||
 		(input.mcpDirectTools?.length ?? 0) > 0 ||
 		allowedToolSet !== undefined;
-	const internalTools = (input.structuredOutput ? ["structured_output"] : []).filter((tool) => !excludedToolSet.has(tool));
+	const internalTools = [
+		...(input.structuredOutput ? ["structured_output"] : []),
+	].filter((tool) => !excludedToolSet.has(tool));
 	const effectiveToolAllowlist = [
 		...new Set([
 			...effectiveDeclaredBuiltinTools,
