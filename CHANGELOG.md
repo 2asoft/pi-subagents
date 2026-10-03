@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `worktree.cleanup` can apply a saved, reviewed plan after discard authorization. It rechecks Git and ownership facts, validates handoff metadata before deleting anything, keeps trees whose path now resolves outside the directory they were created in, protects ignored files and locked or resumed trees, retains local branches, and records a single-use cleanup receipt. Worktrees created before this version are always kept. Thanks to [@quifox](https://github.com/quifox) for [#1622](https://github.com/nicobailon/pi-subagents/issues/1622).
+
 ### Fixed
 
 - When several async jobs crowd the widget and some of them leave the list, the widget now shrinks to the remaining jobs instead of keeping blank rows at its earlier height. Status updates while the same jobs are listed still keep the height fixed. Thanks to [@tara-marchand](https://github.com/tara-marchand) for [#2651](https://github.com/nicobailon/pi-subagents/issues/2651).
