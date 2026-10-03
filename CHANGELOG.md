@@ -4,6 +4,10 @@
 
 ### Added
 
+- Schedules accept `every: "day"` or `"week"` with a local `HH:mm`, an explicit IANA timezone, and weekly weekday selections. Missing local times are skipped and repeated times fire once. Restoration re-resolves the pending local date; existing overlap, catch-up, quiet and mission controls apply. Thanks to [@quifox](https://github.com/quifox) for [#815](https://github.com/nicobailon/pi-subagents/issues/815).
+
+### Changed
+
 - `worktree.cleanup` can apply a saved, reviewed plan after discard authorization. It rechecks Git and ownership facts, validates handoff metadata before deleting anything, keeps trees whose path now resolves outside the directory they were created in, protects ignored files and locked or resumed trees, retains local branches, and records a single-use cleanup receipt. Worktrees created before this version are always kept. Thanks to [@quifox](https://github.com/quifox) for [#1622](https://github.com/nicobailon/pi-subagents/issues/1622).
 
 ### Fixed
