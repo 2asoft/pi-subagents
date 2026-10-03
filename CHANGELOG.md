@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Command tracking records a failed state when Pi's bash tool returns `isError: true`, preserving the returned error for the child.
+
 ## [0.79.0] - 2026-10-17
 
 ### Highlights
