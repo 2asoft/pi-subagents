@@ -142,7 +142,7 @@ export function createChildCommandRuntime(channelDir: string) {
 						if (job.snapshot.state === "running") onUpdate?.(update);
 					}, ctx)).then((result) => {
 						job.snapshot.output = text(result);
-						job.snapshot.state = "completed";
+						job.snapshot.state = result.isError ? "failed" : "completed";
 						const fullOutputPath = (result.details as { fullOutputPath?: string } | undefined)?.fullOutputPath;
 						if (fullOutputPath) job.snapshot.fullOutputPath = fullOutputPath;
 						return result;
