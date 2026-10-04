@@ -15,7 +15,7 @@ The fork keeps four changes above upstream:
 - Foreground resume retains the original fresh or forked context.
 - [Direct task delegation](docs/direct-delegation.md) accepts the exact task, instructions, tools, and inheritance settings without a named profile. Explicit supervisor access and retained resume configuration use the existing launch pipeline.
 - [Linux execution environments](docs/execution-environments.md) run native background tasks under registered bubblewrap policies. Channel cleanup requires ownership and terminal evidence.
-- Development dependencies target Pi 1.0.0. Runtime export resolution follows upstream, and dependency updates retain the supported runtime versions.
+- Development dependencies target Pi 1.0.2. Runtime export resolution follows upstream, and dependency updates retain the supported runtime versions.
 
 Workflow syntax, model-dependent tool activation, built-in MCP support, and orchestration follow upstream. Named profiles remain available explicitly.
 
