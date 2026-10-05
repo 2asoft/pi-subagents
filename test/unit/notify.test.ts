@@ -6,10 +6,12 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import registerSubagentNotify, {
 	buildCompletionDetails,
 	createCompletionSendRegistry,
 	formatGroupedCompletion,
+	type CompletionNotifier,
 	formatSingleCompletion,
 	parseSubagentNotifyContent,
 	type RegisterSubagentNotifyOptions,
@@ -21,6 +23,69 @@ import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_FOREGROUND_COMPLETE_EVENT } fro
 import { createResultDeliveryOwnership } from "../../src/runs/background/result-delivery-ownership.ts";
 
 const COMPLETION_OWNER_ID = "completion-owner-a";
+
+it("keeps reload wakes scoped to one session manager and clears them on quit", async () => {
+	const owner = SessionManager.inMemory();
+	const sessionId = owner.getSessionId();
+	const otherOwner = { getSessionId: () => sessionId };
+	const create = (sessionManager: Parameters<CompletionNotifier["bindSession"]>[0]) => {
+		const messages: any[] = [];
+		const pi = {
+			events: createEventBus(),
+			sendMessage(message: unknown) { messages.push(message); },
+		} as unknown as Parameters<typeof registerSubagentNotify>[0];
+		const notifier = registerSubagentNotify(pi, { currentSessionId: sessionId, completionOwnerId: COMPLETION_OWNER_ID }, { batchConfig: { enabled: false } });
+		notifier.bindSession(sessionManager);
+		return { notifier, messages };
+	};
+	const first = create(owner);
+	await first.notifier.deliver({ id: "queued-wake-scope-result", sessionId, completionOwnerId: COMPLETION_OWNER_ID, success: false, summary: "Needs attention" });
+	assert.equal(first.notifier.hasPendingDelivery(), true);
+	first.notifier.sessionShutdown("reload");
+	first.notifier.dispose();
+	const other = create(otherOwner);
+	const replacement = create(owner);
+	assert.equal(other.notifier.hasPendingDelivery(), false, "even the same session ID on a different manager must not inherit another queue");
+	assert.equal(replacement.notifier.hasPendingDelivery(), true);
+	other.notifier.messageStarted({ role: "custom", ...first.messages[0] });
+	assert.equal(replacement.notifier.hasPendingDelivery(), true, "foreign consumption cannot clear the owner's wake");
+	replacement.notifier.messageStarted({ role: "custom", ...first.messages[0] });
+	assert.equal(replacement.notifier.hasPendingDelivery(), false);
+	await replacement.notifier.deliver({ id: "queued-wake-quit-result", sessionId, completionOwnerId: COMPLETION_OWNER_ID, success: false, summary: "Another wake" });
+	replacement.notifier.sessionShutdown("quit");
+	replacement.notifier.dispose();
+	const reopened = create(owner);
+	assert.equal(reopened.notifier.hasPendingDelivery(), false, "quit clears wakes even if a manager is reused");
+	await reopened.notifier.deliver({ id: "queued-wake-switch-result", sessionId, completionOwnerId: COMPLETION_OWNER_ID, success: false, summary: "Old session wake" });
+	assert.equal(reopened.notifier.hasPendingDelivery(), true);
+	owner.newSession();
+	assert.notEqual(owner.getSessionId(), sessionId);
+	reopened.notifier.bindSession(owner);
+	assert.equal(reopened.notifier.hasPendingDelivery(), false, "changing session UUID on the same manager must discard old wakes");
+	reopened.notifier.dispose();
+	other.notifier.dispose();
+});
+
+it("keeps wakes accepted before the first session bind", async () => {
+	const owner = SessionManager.inMemory();
+	const sessionId = owner.getSessionId();
+	const messages: any[] = [];
+	const pi = {
+		events: createEventBus(),
+		sendMessage(message: unknown) { messages.push(message); },
+	} as unknown as Parameters<typeof registerSubagentNotify>[0];
+	const first = registerSubagentNotify(pi, { currentSessionId: sessionId, completionOwnerId: COMPLETION_OWNER_ID }, { batchConfig: { enabled: false } });
+	first.bindSession(owner);
+	first.sessionShutdown("reload");
+	first.dispose();
+	const replacement = registerSubagentNotify(pi, { currentSessionId: sessionId, completionOwnerId: COMPLETION_OWNER_ID }, { batchConfig: { enabled: false } });
+	await replacement.deliver({ id: "queued-wake-before-bind", sessionId, completionOwnerId: COMPLETION_OWNER_ID, success: false, summary: "Early wake" });
+	replacement.bindSession(owner);
+	assert.equal(replacement.hasPendingDelivery(), true, "binding must not drop a wake accepted before session_start");
+	replacement.messageStarted({ role: "custom", ...messages[0] });
+	assert.equal(replacement.hasPendingDelivery(), false);
+	replacement.dispose();
+});
 
 it("does not deliver awaited workflow child lifecycle completions", async () => {
 	const { events, sent, dispose } = createPi();

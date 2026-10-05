@@ -9,7 +9,7 @@
 import { statSync } from "node:fs";
 import { debuglog } from "node:util";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildCompletionKey, markSeenWithTtl } from "./completion-dedupe.ts";
 import {
 	type CompletionBatchConfig,
@@ -154,6 +154,10 @@ export interface CompletionNotifier {
 	hasPendingDelivery(): boolean;
 	/** Releases a completion wake once Pi starts it (native message_start). */
 	messageStarted(message: AgentMessage): void;
+	/** Adopts wakes a reloaded notifier left queued for the same session manager and session UUID. */
+	bindSession(sessionManager: Pick<ExtensionContext["sessionManager"], "getSessionId">): void;
+	/** Drops queued wakes unless the session is only reloading extensions. */
+	sessionShutdown(reason: string | undefined): void;
 	/** Send every batched completion now instead of waiting for its batch timer. */
 	flush(): void;
 	dispose(): void;
@@ -600,6 +604,13 @@ const processGlobal = globalThis as typeof globalThis & { [completionSendRegistr
 const processCompletionSendRegistry = processGlobal[completionSendRegistrySymbol]
 	?? (processGlobal[completionSendRegistrySymbol] = createCompletionSendRegistry());
 
+// Reload replaces extension instances, not Pi's session manager or queued wakes.
+// A manager can change sessions; retain wakes only while its UUID is unchanged.
+type QueuedWakes = { sessionId: string; wakes: string[] };
+const queuedWakesSymbol = Symbol.for("pi-subagents.queued-completion-wakes.v2");
+const wakeGlobal = globalThis as typeof globalThis & { [queuedWakesSymbol]?: WeakMap<object, QueuedWakes> };
+const queuedWakes = wakeGlobal[queuedWakesSymbol] ?? (wakeGlobal[queuedWakesSymbol] = new WeakMap<object, QueuedWakes>());
+
 function sendCompletion(pi: Pick<ExtensionAPI, "sendMessage">, items: PendingCompletion[], unstartedWakes: string[]): boolean {
 	if (items.length === 0) return true;
 	const details = items.map((item) => item.details);
@@ -780,7 +791,8 @@ export default function registerSubagentNotify(
 	const sendRegistry = options.sendRegistry ?? processCompletionSendRegistry;
 	const batchConfig = resolveCompletionBatchConfig(options.batchConfig);
 	const batchers = new Map<string, CompletionBatcher<PendingCompletion>>();
-	const unstartedWakes: string[] = [];
+	let unstartedWakes: string[] = [];
+	let bound = false;
 	let disposed = false;
 	const ownsResult = options.ownership?.owns
 		?? ((sessionId: string, completionOwnerId: unknown) => sessionId === state.currentSessionId
@@ -910,6 +922,20 @@ export default function registerSubagentNotify(
 			const index = unstartedWakes.indexOf(message.content as string);
 			if (index !== -1) unstartedWakes.splice(index, 1);
 		},
+		bindSession(sessionManager) {
+			if (disposed) return;
+			const sessionId = sessionManager.getSessionId(); // UUID, not state.currentSessionId's possible file path.
+			const retained = queuedWakes.get(sessionManager);
+			const wakes = retained?.sessionId === sessionId ? retained.wakes : [];
+			// Before the first bind, local wakes belong to this session; after it, to the previous one.
+			if (!bound) wakes.push(...unstartedWakes);
+			bound = true;
+			unstartedWakes = wakes;
+			queuedWakes.set(sessionManager, { sessionId, wakes });
+		},
+		sessionShutdown(reason) {
+			if (reason !== "reload") unstartedWakes.length = 0;
+		},
 		flush() {
 			for (const batcher of batchers.values()) batcher.flush();
 		},
@@ -918,7 +944,6 @@ export default function registerSubagentNotify(
 			disposed = true;
 			for (const batcher of batchers.values()) settle(batcher.dispose(), false, "dispose_pending");
 			batchers.clear();
-			unstartedWakes.length = 0;
 			for (const unsubscribe of [unsubscribeAsync, unsubscribeForeground]) {
 				try {
 					unsubscribe?.();

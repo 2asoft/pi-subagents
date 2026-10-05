@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Reloading extensions no longer makes a session look idle while a child's result is still waiting in Pi's queue. A host such as pi-web could replace the session then and lose the result. The session now stays busy until Pi starts that message, and a different session in the same process is not held busy by it. Thanks to [@brettinternet](https://github.com/brettinternet) for [#2687](https://github.com/nicobailon/pi-subagents/pull/2687).
+
 ## [0.76.0] - 2026-10-04
 
 ### Highlights
