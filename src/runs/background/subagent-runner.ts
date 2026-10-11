@@ -128,7 +128,7 @@ import {
 	WORKTREE_AGENT_CWD_PLACEHOLDER,
 	type WorktreeSetup,
 } from "../shared/worktree.ts";
-import { findModelInfo, resolveEffectiveThinking, splitKnownThinkingSuffix } from "../../shared/model-info.ts";
+import { findModelInfo, qualifyModelWithProvider, resolveEffectiveThinking, splitKnownThinkingSuffix } from "../../shared/model-info.ts";
 import { assertThinkingWithinCeiling } from "../../shared/thinking-ceiling.ts";
 import { resolveLaunchBinding } from "../../shared/launch-contract.ts";
 import { writeInitialProgressFile } from "../../shared/settings.ts";
@@ -2985,6 +2985,7 @@ export async function runSubagent(
 		const step = statusPayload.steps[flatIndex];
 		if (!step) return;
 		setOptionalProperty(step, "model", model);
+		setOptionalProperty(step, "launchModel", undefined);
 		setOptionalProperty(step, "thinking", thinking);
 		setOptionalProperty(step, "contextLimit", contextLimit);
 		statusPayload.lastUpdate = now;
@@ -3127,6 +3128,17 @@ export async function runSubagent(
 		} else if (event.type === "message_end" && event.message?.role === "assistant") {
 			appendRecentStepOutput(step, stripAcceptanceReport(extractTextFromContent(event.message.content)).split("\n").slice(-10));
 			step.turnCount = (step.turnCount ?? 0) + 1;
+			// The launch model is only a candidate: a host extension (e.g. a model
+			// router) can switch the child's model on its first input, so report the
+			// model each assistant message actually ran on. Mirrors the foreground
+			// path's `progress.model = observedModel`.
+			if (event.message.model) {
+				const observedModel = qualifyModelWithProvider(event.message.model, event.message.provider, flatSteps[flatIndex]?.modelVerificationRegistry) ?? event.message.model;
+				if (observedModel !== step.model) {
+					step.launchModel ??= step.model;
+					step.model = observedModel;
+				}
+			}
 			const usage = event.message.usage;
 			if (config.usageBudget) {
 				const known = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -3795,7 +3807,9 @@ export async function runSubagent(
 				if (singleResult.toolBudget) statusPayload.toolBudget = singleResult.toolBudget;
 				if (singleResult.toolBudgetBlocked) statusPayload.toolBudgetBlocked = true;
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "sessionName", singleResult.sessionName);
-				setOptionalProperty(requiredStatusStep(statusPayload, fi), "model", singleResult.model);
+				// Keep the model the child was observed running on; a host extension can switch it
+				// after launch, and singleResult.model only names the launch candidate.
+				setOptionalProperty(requiredStatusStep(statusPayload, fi), "model", requiredStatusStep(statusPayload, fi).model ?? singleResult.model);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "thinking", resolveEffectiveThinking(singleResult.model, requiredStatusStep(statusPayload, fi).thinking));
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "requestedModel", singleResult.requestedModel);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "contextOverflow", singleResult.contextOverflow);
@@ -4218,7 +4232,9 @@ export async function runSubagent(
 						if (singleResult.toolBudget) statusPayload.toolBudget = singleResult.toolBudget;
 						if (singleResult.toolBudgetBlocked) statusPayload.toolBudgetBlocked = true;
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "sessionName", singleResult.sessionName);
-						setOptionalProperty(requiredStatusStep(statusPayload, fi), "model", singleResult.model);
+						// Keep the model the child was observed running on; a host extension can switch it
+						// after launch, and singleResult.model only names the launch candidate.
+						setOptionalProperty(requiredStatusStep(statusPayload, fi), "model", requiredStatusStep(statusPayload, fi).model ?? singleResult.model);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "thinking", resolveEffectiveThinking(singleResult.model, requiredStatusStep(statusPayload, fi).thinking));
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "requestedModel", singleResult.requestedModel);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "contextOverflow", singleResult.contextOverflow);
@@ -4703,7 +4719,8 @@ export async function runSubagent(
 			if (singleResult.toolBudget) statusPayload.toolBudget = singleResult.toolBudget;
 			if (singleResult.toolBudgetBlocked) statusPayload.toolBudgetBlocked = true;
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "sessionName", singleResult.sessionName);
-			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "model", singleResult.model);
+			// Keep the observed model over the launch candidate (see the sequential path).
+			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "model", requiredStatusStep(statusPayload, flatIndex).model ?? singleResult.model);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "thinking", resolveEffectiveThinking(singleResult.model, requiredStatusStep(statusPayload, flatIndex).thinking));
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "requestedModel", singleResult.requestedModel);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "contextOverflow", singleResult.contextOverflow);
