@@ -3853,7 +3853,7 @@ function resolveWorkflowChildOutputPath(input: {
 	state?: SubagentState;
 	key: string;
 	params: Record<string, unknown>;
-}): { path?: string; inherited: boolean; resumedOutput?: string } {
+}): { path?: string; inherited: boolean; resumedSavedPath?: string } {
 	const rawOutput = input.params.output;
 	const hasExplicitOutput = typeof rawOutput === "string" || typeof rawOutput === "boolean";
 	if (typeof input.params.resume === "string" && (!hasExplicitOutput || rawOutput === true || rawOutput === "true")) {
@@ -3865,9 +3865,8 @@ function resolveWorkflowChildOutputPath(input: {
 		}, input.state);
 		const recoveryOutput = "recoveryDescriptor" in target ? target.recoveryDescriptor?.outputPath : undefined;
 		if (hasExplicitOutput) return { path: recoveryOutput, inherited: false };
-		// An output-less foreground resume reuses its recorded output; only an absolute path is known before the new run id exists.
-		const foregroundOutput = target.source === "foreground" ? target.resumeContract?.output : undefined;
-		return { path: recoveryOutput, inherited: false, resumedOutput: recoveryOutput ?? (typeof foregroundOutput === "string" && path.isAbsolute(foregroundOutput) ? foregroundOutput : undefined) };
+		const savedPath = recoveryOutput ?? (target.source === "foreground" ? target.savedOutputPath ?? resolveSingleOutputPath(target.resumeContract?.output, input.ctxCwd) : undefined);
+		return { inherited: false, ...(savedPath ? { resumedSavedPath: savedPath } : {}) };
 	}
 	const childCwd = resolveWorkflowChildLocalCwd(input);
 	let agentOutput: string | undefined;
@@ -3920,10 +3919,11 @@ function workflowChildOutputClaims(input: {
 	}
 	const overrides = new Map<string, string>();
 	for (const entry of resolvedEntries) {
-		// An output-less resume keeps its retained path unless an earlier child of this workflow already owns it.
-		const resumeCollides = entry.resumedOutput !== undefined && input.claimedOutputPaths.has(resolveWorkflowHostOutputClaimPath(entry.resumedOutput));
-		if (resumeCollides || (entry.inherited && entry.path && (paths.get(resolveWorkflowHostOutputClaimPath(entry.path)) ?? 0) > 1)) {
-			const output = workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.workflowRunId, entry.key);
+		// The resumed run owns the report it saved, inside or outside this workflow, so an output-less resume writes its own.
+		if (entry.resumedSavedPath || (entry.inherited && entry.path && (paths.get(resolveWorkflowHostOutputClaimPath(entry.path)) ?? 0) > 1)) {
+			let output = workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.workflowRunId, entry.key);
+			// A rerun of the same workflow and key generates the very file the resumed run saved.
+			if (entry.resumedSavedPath && resolveWorkflowHostOutputClaimPath(output) === resolveWorkflowHostOutputClaimPath(entry.resumedSavedPath)) output = suffixedOutputPath(output, input.workflowRunId.slice(0, 8));
 			overrides.set(entry.key, output);
 			entry.path = output;
 		}
@@ -3935,14 +3935,6 @@ function workflowChildOutputClaims(input: {
 		const claimPath = resolveWorkflowHostOutputClaimPath(resolved);
 		const previous = claims.get(claimPath);
 		if (previous) return { error: `Workflow children '${previous}' and '${key}' resolve output to the same path: ${resolved}. Use distinct child output paths.` };
-		claims.set(claimPath, key);
-		childClaims.set(key, claimPath);
-	}
-	// Record a discovered output-less resume path for later admissions without adding same-batch duplicate errors.
-	for (const { key, path: resolved, resumedOutput } of resolvedEntries) {
-		if (resolved || !resumedOutput) continue;
-		const claimPath = resolveWorkflowHostOutputClaimPath(resumedOutput);
-		if (claims.has(claimPath)) continue;
 		claims.set(claimPath, key);
 		childClaims.set(key, claimPath);
 	}
