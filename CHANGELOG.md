@@ -4,6 +4,7 @@
 
 ### Added
 
+- A long-lived session never picked up a changed `subagent` description, such as an edited `subagent-tool-description.md`, a `toolDescriptionMode` change, or a package upgrade, because each session keeps the pi-subagents tool definitions it already declared and there was no way to turn that off short of starting a new session. The new `pinToolDeclarations` config key, `true` by default, can be set to `false` so a resumed session gets the current definitions and prompt text on the next restart, at the cost of one prompt-cache miss. Thanks to [@advaitpaliwal](https://github.com/advaitpaliwal) for [#2853](https://github.com/nicobailon/pi-subagents/pull/2853). ([#2852](https://github.com/nicobailon/pi-subagents/issues/2852))
 - A parent agent learned about its background subagents only from completion notices or a `status` call, so a few turns after launching one it could forget it was running and launch the same work again or report that nothing was in flight. The new `activeRunsPrompt` config key, off by default, adds a short `active_subagents` system prompt section while this session has queued or running background runs. It lists each run's id, agents, mode, and chain step, and is removed when the last run finishes. Thanks to [@advaitpaliwal](https://github.com/advaitpaliwal) for the request. ([#2831](https://github.com/nicobailon/pi-subagents/issues/2831))
 
 ### Changed
