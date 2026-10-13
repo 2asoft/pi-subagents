@@ -486,15 +486,19 @@ describe("active async capacity", () => {
 		}
 	});
 
-	it("reclaims a terminal workflow only when every unresolved async child is an old failed run with a dead runner", () => {
-		type Child = { state: string; lastActivityAt?: number; pid?: "dead" | "alive"; sessionId?: string; runnerId?: unknown; pidNamespace?: string };
+	it("reclaims a terminal workflow only when every unresolved async child is an old terminal run with a dead runner", () => {
+		type Child = { state: string; lastActivityAt?: number; pid?: "dead" | "alive"; sessionId?: string; runnerId?: unknown; pidNamespace?: string; processTerminal?: Record<string, unknown> };
 		const abandoned: Child = { state: "failed", lastActivityAt: 0, pid: "dead" };
 		const cases: Array<{ name: string; children: Child[]; endedAt?: number; threshold?: number | false; releases: boolean }> = [
 			{ name: "abandoned children", children: [abandoned, abandoned], releases: true },
 			{ name: "later child still running", children: [abandoned, { state: "running" }], releases: false },
 			{ name: "workflow ended recently", children: [abandoned], endedAt: 9_500, releases: false },
 			{ name: "child active recently", children: [{ ...abandoned, lastActivityAt: 9_500 }], releases: false },
-			{ name: "unresolved complete child", children: [{ ...abandoned, state: "complete" }], releases: false },
+			{ name: "stopped and complete children", children: [{ ...abandoned, state: "stopped" }, { ...abandoned, state: "complete" }], releases: true },
+			// A stopped result repaired after its launcher was gone (#2863).
+			{ name: "observer-unavailable stopped child", children: [abandoned, { ...abandoned, state: "stopped", processTerminal: { version: 1, state: "unknown", runId: "child-1", runnerProcessInstanceId: "observer-unavailable", reason: "observer-unavailable" } }], releases: true },
+			{ name: "paused child", children: [{ ...abandoned, state: "paused" }], releases: false },
+			{ name: "stopped child runner alive", children: [{ ...abandoned, state: "stopped", pid: "alive" }], releases: false },
 			{ name: "child runner alive", children: [{ ...abandoned, pid: "alive" }], releases: false },
 			{ name: "child runner in another PID namespace", children: [{ ...abandoned, pidNamespace: "pid:[2]" }], releases: false },
 			{ name: "child from another session", children: [{ ...abandoned, sessionId: "other-session" }], releases: false },
@@ -514,7 +518,7 @@ describe("active async capacity", () => {
 					const runId = `child-${index}`;
 					const pid = 50_000 + index;
 					pids.set(pid, child.pid ?? "alive");
-					writeJson(path.join(asyncRoot, runId, "status.json"), { runId, sessionId: child.sessionId ?? "session-a", mode: "single", state: child.state, pid, pidNamespaceScope: child.pidNamespace ?? "pid:[1]", startedAt: 0, lastActivityAt: child.lastActivityAt, processTerminal: { version: 1, state: "pending", runId, runnerProcessInstanceId: child.runnerId ?? `runner-${index}` } });
+					writeJson(path.join(asyncRoot, runId, "status.json"), { runId, sessionId: child.sessionId ?? "session-a", mode: "single", state: child.state, pid, pidNamespaceScope: child.pidNamespace ?? "pid:[1]", startedAt: 0, lastActivityAt: child.lastActivityAt, processTerminal: child.processTerminal ?? { version: 1, state: "pending", runId, runnerProcessInstanceId: child.runnerId ?? `runner-${index}` } });
 					writeJson(path.join(asyncRoot, runId, "process-terminal.json"), { version: 1, state: "pending", runId, runnerProcessInstanceId: `runner-${index}` });
 					return { agent: "worker", workflowKey: runId, runId, async: true, status: child.state };
 				});
@@ -529,7 +533,7 @@ describe("active async capacity", () => {
 					assert.equal(event.releasedBy, "abandoned-timeout");
 					assert.equal(event.processProof, "unknown");
 					assert.equal(event.controller, "unregistered");
-					assert.deepEqual(event.abandonedChildren.map((child: { runId: string }) => child.runId), ["child-0", "child-1"]);
+					assert.deepEqual(event.abandonedChildren.map((child: { runId: string; state: string }) => [child.runId, child.state]), testCase.children.map((child, index) => [`child-${index}`, child.state]));
 				}
 			} finally {
 				fs.rmSync(rootDir, { recursive: true, force: true });
