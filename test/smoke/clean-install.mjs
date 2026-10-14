@@ -49,6 +49,7 @@ assert.ok(packed.files.some(file => file.path === "bundle/index.js"), "bundled e
 assert.ok(packed.files.some(file => file.path === "src/inspectors/inspector-runner.js"), "compiled inspector runner must ship");
 assert.ok(packed.files.some(file => file.path === "src/runs/background/subagent-runner-bootstrap.js"), "compiled background bootstrap must ship");
 assert.ok(packed.files.some(file => file.path === "src/runs/background/subagent-runner.js"), "compiled background execution module must ship");
+for (const file of ["environment-launcher", "environment-bootstrap"]) assert.ok(packed.files.some(entry => entry.path === `src/runs/background/${file}.js`), `${file} must ship`);
 fs.writeFileSync(path.join(extension, "package.json"), JSON.stringify({ private: true, dependencies: { "pi-subagents": `file:${path.join(root, packed.filename)}` } }));
 run("extension-install", "npm", ["install", "--no-audit", "--no-fund"], extension);
 const installed = path.join(extension, "node_modules/pi-subagents");
@@ -117,4 +118,23 @@ const packedSelection = run("packed-selection", process.execPath, [
 ], cwd, childEnv);
 assert.match(packedSelection.stdout, /PASS packed node_modules selects compiled JavaScript/);
 assert.equal(findHostPeerPackageDir(pi, "@earendil-works/pi-client"), undefined);
-console.log(`${positive.stdout.trim()}\nArtifacts: ${root}`);
+const environmentFixtures = path.join(root, "environment-smoke");
+fs.mkdirSync(environmentFixtures);
+for (const file of ["environment-background.mjs", "environment-parent.ts", "environment-policy.ts", "environment-provider.ts"]) {
+	let fixture = fs.readFileSync(new URL(file, import.meta.url), "utf8");
+	if (file === "environment-parent.ts") {
+		for (const specifier of ["../../index.ts", "../../src/api/execution-environments.ts", "../../src/runs/background/process-terminal.ts", "../../src/runs/background/environment-authority.ts"]) {
+			fixture = fixture.replace(JSON.stringify(specifier), JSON.stringify(path.join(installed, specifier.slice(6).replace(/\.ts$/, ".js"))));
+		}
+	}
+	if (file === "environment-policy.ts") {
+		fixture = fixture.replace('path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")', JSON.stringify(installed))
+			.replace('"/usr", "/lib", "/lib64", repository,', `"/usr", "/lib", "/lib64", ${JSON.stringify(host)}, ${JSON.stringify(extension)}, ${JSON.stringify(environmentFixtures)}, repository,`)
+			.replace('path.join(repository, "test/smoke/environment-provider.ts")', JSON.stringify(path.join(environmentFixtures, "environment-provider.ts")));
+	}
+	fs.writeFileSync(path.join(environmentFixtures, file), fixture);
+}
+const environment = run("environment-background", process.execPath, ["--experimental-strip-types", path.join(environmentFixtures, "environment-background.mjs"), path.join(host, "node_modules", ".bin", "pi")], cwd);
+assert.match(environment.stdout, /PASS: native confined startup and supervisor reply/);
+assert.match(environment.stdout, /PASS: native restart\/resume/);
+console.log(`${positive.stdout.trim()}\n${environment.stdout.trim()}\nArtifacts: ${root}`);

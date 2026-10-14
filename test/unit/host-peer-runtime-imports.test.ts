@@ -113,6 +113,11 @@ test("the standalone inspector runner reaches no host peer package, because its 
 	assert.ok(visited > 20, `expected a non-trivial reachable file set (a broken resolver could undercount it), got ${visited}`);
 });
 
+test("the standalone environment owner reaches no host peer package", () => {
+	const { violations } = unaliasedHostPeerImports(path.join(projectRoot, "src", "runs", "background", "environment-launcher.ts"), new Set());
+	assert.deepEqual(violations, [], violations.join("\n"));
+});
+
 test("resolves pi-ai/oauth to its exact package export instead of appending to the root alias", () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-core-node-alias-"));
 	const packageDir = path.join(root, "node_modules", "@earendil-works", "pi-ai");

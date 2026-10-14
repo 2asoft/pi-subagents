@@ -3,21 +3,34 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import { createInterface } from "node:readline";
-import { Type } from "typebox";
-import { Check } from "typebox/value";
 import { writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import { currentPidNamespaceScope } from "./pid-namespace.ts";
 import { acquireSessionLease } from "../shared/session-lease.ts";
 import { admitEnvironmentSession, environmentAuthorityDirectory, readEnvironmentBinding, readEnvironmentFile } from "./environment-authority.ts";
 
-const LaunchSchema = Type.Object({ runDirectory: Type.String(), bootstrapPath: Type.String(), runnerProcessInstanceId: Type.String(), args: Type.Array(Type.String()), cwd: Type.String(), deadlineAt: Type.Optional(Type.Number()), resultDestination: Type.String() });
-const NamespaceSchema = Type.Object({ "child-pid": Type.Integer({ minimum: 1 }), "pid-namespace": Type.Integer({ minimum: 1 }) });
+function parseLaunch(value: unknown) {
+	if (!value || typeof value !== "object" || Array.isArray(value)
+		|| !("runDirectory" in value) || typeof value.runDirectory !== "string"
+		|| !("bootstrapPath" in value) || typeof value.bootstrapPath !== "string"
+		|| !("runnerProcessInstanceId" in value) || typeof value.runnerProcessInstanceId !== "string"
+		|| !("cwd" in value) || typeof value.cwd !== "string"
+		|| !("resultDestination" in value) || typeof value.resultDestination !== "string"
+		|| !("args" in value) || !Array.isArray(value.args)
+		|| ("deadlineAt" in value && value.deadlineAt !== undefined && typeof value.deadlineAt !== "number")) {
+		throw new Error("Invalid environment launcher request.");
+	}
+	const args = value.args.map((arg: unknown) => {
+		if (typeof arg !== "string") throw new Error("Invalid environment launcher request.");
+		return arg;
+	});
+	return { runDirectory: value.runDirectory, bootstrapPath: value.bootstrapPath, runnerProcessInstanceId: value.runnerProcessInstanceId,
+		args, cwd: value.cwd, resultDestination: value.resultDestination, deadlineAt: "deadlineAt" in value && typeof value.deadlineAt === "number" ? value.deadlineAt : undefined };
+}
 import { captureEnvironmentProcess as identity, environmentProcessState, type EnvironmentProcessIdentity as HostIdentity } from "./environment-process-identity.ts";
 
 /** The parent sends the launch through stdin so environment values are never archived. */
 async function main(): Promise<void> {
-	const raw: unknown = JSON.parse(fs.readFileSync(0, "utf8"));
-	if (!Check(LaunchSchema, raw)) throw new Error("Invalid environment launcher request.");
+	const raw = parseLaunch(JSON.parse(fs.readFileSync(0, "utf8")));
 	const binding = readEnvironmentBinding(raw.runDirectory);
 	if (!binding) throw new Error("Environment launcher requires host authority.");
 	admitEnvironmentSession(binding, binding.sessionFile);
@@ -52,7 +65,9 @@ async function main(): Promise<void> {
 	lines.on("line", line => {
 		try {
 			const value: unknown = JSON.parse(line);
-			if (!Check(NamespaceSchema, value)) return;
+			if (!value || typeof value !== "object" || Array.isArray(value)
+				|| !("child-pid" in value) || typeof value["child-pid"] !== "number" || !Number.isSafeInteger(value["child-pid"]) || value["child-pid"] < 1
+				|| !("pid-namespace" in value) || typeof value["pid-namespace"] !== "number" || !Number.isSafeInteger(value["pid-namespace"]) || value["pid-namespace"] < 1) return;
 			if (namespace) throw new Error("Bubblewrap repeated namespace identity.");
 			const init = identity(value["child-pid"]);
 			const status = fs.readFileSync(`/proc/${value["child-pid"]}/status`, "utf8");
