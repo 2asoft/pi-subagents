@@ -71,7 +71,7 @@ describe("registered subagent tool description", () => {
 				/One child: \{task,options:\{tools\?,instructions\?,extensions\?\}\} or \{agent,task\}/,
 				/exactly one top-level subagent workflow call with async:true; write one ```js workflow block in this reply, then call subagent\(\{workflow:true\}\)/,
 				/\{action,id\?,options:\{\.\.\.\}\}; fields not in this schema go in options/,
-				/Named profiles are optional\. Pass models as exact provider\/id; unknown agents or models return valid choices/,
+				/Profiles are optional\. Pass models as exact provider\/id; unknown agents or models return valid choices/,
 				/Native async completion wakes this session: return control; do not sleep, poll or call bg_wait for it/,
 				/One writer per cwd\/worktree/,
 				/After a launch or runtime failure, stop and report it; never silently switch to interactive_shell, pi -ne or another CLI/,
