@@ -1,17 +1,49 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Type, type Static } from "typebox";
-import { Check } from "typebox/value";
 import { DIRS, TEMP_ROOT_DIR } from "../../shared/types.ts";
 import { writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import type { EnvironmentIdentity } from "../../shared/execution-environments.ts";
 
 export const ENVIRONMENT_AUTHORITY_ROOT = path.join(TEMP_ROOT_DIR, "environment-owners");
-const BindingSchema = Type.Object({
-	version: Type.Literal(1), runId: Type.String(), runDirectory: Type.String(), sessionRoot: Type.String(), sessionFile: Type.String(),
-	environment: Type.Object({ name: Type.String(), digest: Type.String(), files: Type.Array(Type.Object({ path: Type.String(), sha256: Type.String() })) }),
-}, { additionalProperties: false });
-export type EnvironmentBinding = Static<typeof BindingSchema>;
+export interface EnvironmentBinding {
+	version: 1;
+	runId: string;
+	runDirectory: string;
+	sessionRoot: string;
+	sessionFile: string;
+	environment: EnvironmentIdentity;
+}
+
+// Inspector and metadata readers run without Pi's host-peer loader.
+function parseEnvironmentBinding(value: unknown): EnvironmentBinding {
+	if (!value || typeof value !== "object" || Array.isArray(value)
+		|| !("version" in value) || value.version !== 1
+		|| !("runId" in value) || typeof value.runId !== "string"
+		|| !("runDirectory" in value) || typeof value.runDirectory !== "string"
+		|| !("sessionRoot" in value) || typeof value.sessionRoot !== "string"
+		|| !("sessionFile" in value) || typeof value.sessionFile !== "string"
+		|| !("environment" in value)
+		|| Object.keys(value).some(key => !["version", "runId", "runDirectory", "sessionRoot", "sessionFile", "environment"].includes(key))) {
+		throw new Error("Invalid authoritative execution environment binding; refusing fallback.");
+	}
+	const environment = value.environment;
+	if (!environment || typeof environment !== "object" || Array.isArray(environment)
+		|| !("name" in environment) || typeof environment.name !== "string"
+		|| !("digest" in environment) || typeof environment.digest !== "string"
+		|| !("files" in environment) || !Array.isArray(environment.files)) {
+		throw new Error("Invalid authoritative execution environment binding; refusing fallback.");
+	}
+	const files = environment.files.map((file: unknown) => {
+		if (!file || typeof file !== "object" || Array.isArray(file)
+			|| !("path" in file) || typeof file.path !== "string"
+			|| !("sha256" in file) || typeof file.sha256 !== "string") {
+			throw new Error("Invalid authoritative execution environment binding; refusing fallback.");
+		}
+		return { path: file.path, sha256: file.sha256 };
+	});
+	return { version: 1, runId: value.runId, runDirectory: value.runDirectory, sessionRoot: value.sessionRoot, sessionFile: value.sessionFile,
+		environment: { name: environment.name, digest: environment.digest, files } };
+}
 
 export function environmentAuthorityDirectory(runDirectory: string): string {
 	const runId = path.basename(fs.existsSync(runDirectory) ? fs.realpathSync(runDirectory) : path.resolve(runDirectory));
@@ -32,8 +64,8 @@ export function readEnvironmentBinding(runDirectory: string): EnvironmentBinding
 	admitEnvironmentRunDirectory(runDirectory);
 	const directory = environmentAuthorityDirectory(runDirectory);
 	if (!fs.existsSync(directory)) return undefined;
-	const value: unknown = JSON.parse(fs.readFileSync(path.join(directory, "binding.json"), "utf8"));
-	if (!Check(BindingSchema, value) || value.runId !== path.basename(fs.realpathSync(runDirectory)) || value.runDirectory !== fs.realpathSync(runDirectory)) {
+	const value = parseEnvironmentBinding(JSON.parse(fs.readFileSync(path.join(directory, "binding.json"), "utf8")));
+	if (value.runId !== path.basename(fs.realpathSync(runDirectory)) || value.runDirectory !== fs.realpathSync(runDirectory)) {
 		throw new Error("Invalid authoritative execution environment binding; refusing fallback.");
 	}
 	return value;
