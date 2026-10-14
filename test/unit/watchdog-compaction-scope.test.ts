@@ -62,6 +62,24 @@ function createHarness(review: WatchdogReviewFunction) {
 }
 
 describe("watchdog compaction scope", () => {
+	it("uses user text as scope and excludes system instructions from custom-message starts", async () => {
+		const requests: Parameters<WatchdogReviewFunction>[0][] = [];
+		const { runtime, emit } = createHarness(request => { requests.push(request); return { stopReason: "stop" }; });
+		try {
+			await emit("session_start", { reason: "startup" });
+			await emit("before_agent_start", { messageType: "user", prompt: "AUTHORIZED_USER_TASK", systemPrompt: "SYSTEM_SCOPE_CANARY" });
+			await emit("turn_end", activityTurn("First delivered result"));
+			await emit("agent_end");
+			assert.match(requests[0]!.delta, /AUTHORIZED_USER_TASK/);
+			assert.doesNotMatch(requests[0]!.delta, /SYSTEM_SCOPE_CANARY/);
+			await emit("before_agent_start", { messageType: "custom", message: { customType: "subagent-notify", content: "Delivered result", display: true }, systemPrompt: "CUSTOM_SYSTEM_SCOPE_CANARY" });
+			await emit("turn_end", activityTurn("Second delivered result"));
+			await emit("agent_end");
+			assert.equal(requests.length, 2);
+			assert.match(requests[1]!.delta, /AUTHORIZED_USER_TASK/);
+			assert.doesNotMatch(requests[1]!.delta, /CUSTOM_SYSTEM_SCOPE_CANARY/);
+		} finally { runtime.dispose(); }
+	});
 	it("preserves user scope while clearing transient activity", async () => {
 		const requests: Parameters<WatchdogReviewFunction>[0][] = [];
 		const { runtime, emit } = createHarness((request) => {
