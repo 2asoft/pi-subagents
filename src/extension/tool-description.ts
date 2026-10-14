@@ -25,7 +25,7 @@ const structuredCalls = "One child: {task,options:{tools?,instructions?,extensio
 
 const essentials = (on: FeatureText) => `${on("workflow-scripts", scriptCalls, structuredCalls)}
 Management: {action,id?,options:{...}}; fields not in this schema go in options.
-Direct tasks use fresh context and unchanged task text, with no profile, boundary prose or implicit output. options.executionEnvironment confines a native async leaf; requires fresh context and disabled context/skill inheritance. Named profiles are optional. Pass models as exact provider/id; unknown agents or models return valid choices.
+Direct tasks: fresh context, exact text, output:false. Guide execution-environments. Named profiles are optional. Pass models as exact provider/id; unknown agents or models return valid choices.
 Details: guide workflows/recommended-orchestration-pattern (async, review, failure recovery), ${on("workflow-scripts", "guide workflows/scripted-workflows, ")}guide tool-reference/retained-children, guide tool-reference/external-cli-agent-profiles.
 
 ${SUBAGENT_SAFETY_GUIDANCE}`;
