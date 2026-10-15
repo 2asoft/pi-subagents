@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- The RPC `subagent-async` status snapshot now includes the `model` and `thinking` level each background step runs on, so hosts can show which model a child actually chose. Thanks to [@agustinsacco](https://github.com/agustinsacco) for [#2893](https://github.com/nicobailon/pi-subagents/pull/2893). ([#2892](https://github.com/nicobailon/pi-subagents/issues/2892))
+
 ### Changed
 
 - The pi-subagents skill now says that `subagent`, `subagents_enable`, `subagent_supervisor`, `contact_supervisor`, and `structured_output` are model-only tool calls that codemode scripts cannot reach. With codemode on, models used to call `tools.subagent_supervisor(...)` from a script and get a "does not exist" error. Thanks to [@CovetingEpiphany2152](https://github.com/CovetingEpiphany2152) for the report. ([#2887](https://github.com/nicobailon/pi-subagents/issues/2887))
