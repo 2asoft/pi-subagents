@@ -77,7 +77,8 @@ import {
 	DEFAULT_GLOBAL_CONCURRENCY_LIMIT,
 	Semaphore,
 } from "../shared/parallel-utils.ts";
-import { applyThinkingSuffix, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/child-tool-plan.ts";
+import { applyThinkingSuffix, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan, supervisorChannelDir } from "../shared/child-tool-plan.ts";
+import { retainsChildCommand } from "../shared/child-commands.ts";
 import type { InheritedChildRuntime } from "../shared/child-launch.ts";
 import { buildRunnerChildLaunch } from "./runner-child-launch.ts";
 import { normalizeExtensionBindings } from "../shared/extension-bindings.ts";
@@ -2785,6 +2786,7 @@ export async function runSubagent(
 		step.activityState = "needs_attention";
 		statusPayload.activityState = "needs_attention";
 		const toolDurationMs = Math.max(0, now - target.startedAt);
+		const toolCallId = target.key.startsWith("id:") ? target.key.slice(3) : undefined;
 		appendControlEvent(buildControlEvent(omitUndefinedProperties({
 			type: "needs_attention",
 			from: previous,
@@ -2799,7 +2801,8 @@ export async function runSubagent(
 			tokens: step.tokens?.total,
 			toolCount: step.toolCount,
 			currentTool: target.tool,
-			toolCallId: target.key.startsWith("id:") ? target.key.slice(3) : undefined,
+			toolCallId,
+			hasCommandController: Boolean(toolCallId && retainsChildCommand(supervisorChannelDir(id, step.agent, flatIndex), toolCallId)),
 			currentToolDurationMs: toolDurationMs,
 			currentPath: target.path,
 		})));

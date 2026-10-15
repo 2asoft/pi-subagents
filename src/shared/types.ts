@@ -390,6 +390,8 @@ export interface ControlEvent {
 	toolCount?: number;
 	currentTool?: string;
 	toolCallId?: string;
+	/** True only when the child's native command controller manages `toolCallId`; gates command-control suggestions in notices. */
+	hasCommandController?: boolean;
 	currentToolDurationMs?: number;
 	currentPath?: string;
 	elapsedMs?: number;
