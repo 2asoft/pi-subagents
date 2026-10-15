@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Replying to a supervisor request that was already answered, expired or withdrawn now lists the requests that are pending instead, so the parent can answer a child's newer request without another `pending` call. Thanks to [@agustinsacco](https://github.com/agustinsacco) for [#2895](https://github.com/nicobailon/pi-subagents/pull/2895). ([#2894](https://github.com/nicobailon/pi-subagents/issues/2894))
+
 ### Fixed
 
 - After Pi auto-compacted in the middle of a running turn, the async and Fleet status widgets stayed hidden until the whole run ended, so background subagents showed no status in the TUI or to RPC hosts. They now come back as soon as the compaction finishes. Thanks to [@agustinsacco](https://github.com/agustinsacco) for [#2891](https://github.com/nicobailon/pi-subagents/pull/2891). ([#2890](https://github.com/nicobailon/pi-subagents/issues/2890))
