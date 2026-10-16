@@ -136,6 +136,32 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(updates.length, count, "no trailing timer after settlement");
 	});
 
+	it("names a running background workflow child and its run id from launch", async () => {
+		mockPi.onCall({ matchArgIncludes: "Child A", delay: 300, output: "A done" });
+		const updates: any[] = [];
+		const result = await makeExecutor([makeAgent("worker")], {}, true).execute("wf-launch-identity", {
+			workflowScript: `return await runs.run("a", { agent: "worker", task: "Child A" });`,
+			async: false, chatProgress: "off",
+		}, undefined, (update) => updates.push(structuredClone(update.details)), makeMinimalCtx(tempDir));
+		assert.equal(result.isError, undefined, JSON.stringify(result.content));
+		const settledRunId = result.details.workflowChildren.children.find((row) => row.childId === "a")?.runId;
+		assert.ok(settledRunId);
+		const running = updates.flatMap((update) => update.workflowChildren?.children ?? []).find((row) => row.childId === "a" && row.state === "running" && row.runId);
+		assert.deepEqual({ agent: running?.agent, runId: running?.runId }, { agent: "worker", runId: settledRunId });
+	});
+
+	it("still runs a background workflow child when the host's progress callback throws at its launch", async () => {
+		mockPi.onCall({ matchArgIncludes: "Child A", delay: 100, output: "A done" });
+		const result = await makeExecutor([makeAgent("worker")], {}, true).execute("wf-launch-update-throws", {
+			workflowScript: `const a = await runs.run("a", { agent: "worker", task: "Child A" }); return a.ok ? "ok" : a.error;`,
+			async: false, chatProgress: "off",
+		}, undefined, (update) => {
+			if (update.details.workflowChildren?.children.some((row: { runId?: string }) => row.runId)) throw new Error("host update failed");
+		}, makeMinimalCtx(tempDir));
+		assert.equal(result.isError, undefined, JSON.stringify(result.content));
+		assert.equal(result.details.workflowChildren.children.find((row) => row.childId === "a")?.state, "completed");
+	});
+
 	it("names the workflow child that has no agent", async () => {
 		const result = await makeExecutor([makeAgent("worker")]).execute("wf-missing-agent", {
 			workflowScript: `const [child] = await runs.all([{ key: "r1", task: "Review", async: false }]); return child.ok ? "ok" : child.error;`,

@@ -6485,6 +6485,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const workflowHostSteps = new Map<string, HostStepNode>();
 			let liveWorkflow: NonNullable<Details["workflow"]> = { trace: [], emits: [], console: [], ...(workflowResource ? { resource: workflowResource.provenance } : {}) };
 			const childProgress = new Map<string, ReturnType<typeof workflowChildProgress>>();
+			const childLaunches = new Map<string, { agent: string; runId?: string }>();
 			let activityTimer: ReturnType<typeof setTimeout> | undefined;
 			let lastProgressAt = 0;
 			let workflowProgressClosed = false;
@@ -6495,7 +6496,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				if (activityTimer) clearTimeout(activityTimer);
 				activityTimer = undefined;
 				lastProgressAt = Date.now();
-				const liveWorkflowChildren = workflowChildSummary({ parentToolCallId: _id, workflowRunId: foregroundWorkflowRunId, workflowState: "running", inventoryComplete: false, trace: liveWorkflow.trace, progress: childProgress });
+				const liveWorkflowChildren = workflowChildSummary({ parentToolCallId: _id, workflowRunId: foregroundWorkflowRunId, workflowState: "running", inventoryComplete: false, trace: liveWorkflow.trace, progress: childProgress, launches: childLaunches });
 				onUpdate?.(workflowProgressUpdate(foregroundWorkflowRunId, chatProgress, liveWorkflow, liveWorkflowChildren, workflowPreflight));
 			};
 			try {
@@ -6573,11 +6574,20 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								if (childAgent?.runner?.type === "external-cli" || childAgent?.runner?.type === "external-job") throw new Error("Workflow child permit supports native Pi children only.");
 								workflowPermitContexts.set(childRequest, { child: { permit: delegatedWorkflowPermit, workflowRunId: foregroundWorkflowRunId, childKey: key } });
 							}
-							workflowLaunchObservers.set(childRequest, (launch) => recordMissionWorkflowChild(missionBinding, foregroundWorkflowRunId, key, {
-								status: "running",
-								agent: launch.agent,
-								...(launch.sessionFile ? { sessionPath: launch.sessionFile } : {}),
-							}));
+							workflowLaunchObservers.set(childRequest, (launch) => {
+								childLaunches.set(key, { agent: launch.agent, ...(launch.runId ? { runId: launch.runId } : {}) });
+								// Telemetry must not decide the child's outcome, as with onTrace in scripted-workflow.
+								try {
+									sendWorkflowProgress();
+								} catch (error) {
+									console.error("Workflow progress update failed:", error);
+								}
+								recordMissionWorkflowChild(missionBinding, foregroundWorkflowRunId, key, {
+									status: "running",
+									agent: launch.agent,
+									...(launch.sessionFile ? { sessionPath: launch.sessionFile } : {}),
+								});
+							});
 							return execute(randomUUID(), childRequest, workflowSignal, (update) => {
 								const progress = update.details.progress?.[0];
 								if (!progress) return;
