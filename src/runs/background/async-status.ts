@@ -27,6 +27,7 @@ import { formatTimeoutRecoveryLines, projectTimeoutRecovery } from "../shared/mu
 import { formatWorkflowChecklistText, projectWorkflowChecklist } from "../../workflows/workflow-checklist.ts";
 import type { RawDrainStatusObserver } from "../shared/readonly-drain-observation.ts";
 import { childWatchdogProgressForModel } from "../../watchdog/child-status.ts";
+import { ownerSessionIds } from "../shared/run-ownership.ts";
 
 interface AsyncRunStepSummary {
 	index: number;
@@ -259,7 +260,7 @@ export function resolveTargetedAsyncRun(asyncDirRoot: string, id: string, sessio
 	}
 	if (sessionId !== undefined) {
 		const status = readStatus(asyncDir);
-		if (status?.sessionId !== sessionId) return canScanAsyncRunPrefix(id) ? { kind: "prefix" } : { kind: "reject" };
+		if (!ownerSessionIds(sessionId).has(status?.sessionId)) return canScanAsyncRunPrefix(id) ? { kind: "prefix" } : { kind: "reject" };
 	}
 	return { kind: "exact", id };
 }
@@ -491,6 +492,7 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 	const wantsActive = options.states === undefined || options.states.some(isActiveAsyncState);
 	const wantsTerminal = options.states === undefined || options.states.some((state) => !isActiveAsyncState(state));
 	const includeNested = options.includeNested !== false;
+	const owners = options.sessionId === undefined ? undefined : ownerSessionIds(options.sessionId);
 	try {
 		if (options.runId !== undefined) {
 			const resolution = resolveTargetedAsyncRun(asyncDirRoot, options.runId, options.sessionId);
@@ -518,7 +520,9 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 				}
 			}
 			if (wantsTerminal) {
-				for (const entry of readRecentTerminalRunIndex(asyncDirRoot, { sessionId: options.sessionId, ...(options.entryLimit !== undefined ? { limit: options.entryLimit } : {}) })) indexed.add(entry);
+				for (const sessionId of owners ?? [undefined]) {
+					for (const entry of readRecentTerminalRunIndex(asyncDirRoot, { sessionId, ...(options.entryLimit !== undefined ? { limit: options.entryLimit } : {}) })) indexed.add(entry);
+				}
 			}
 			entries = [...indexed];
 		}
@@ -549,9 +553,9 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 		let status: (AsyncStatus & { cwd?: string }) | null;
 		try {
 			// Reconciliation can rewrite state; session-scoped discovery does not own foreign runs.
-			if (options.sessionId !== undefined) {
+			if (owners) {
 				const stored = readStatus(asyncDir);
-				if (stored && stored.sessionId !== options.sessionId) {
+				if (stored && !owners.has(stored.sessionId)) {
 					observeStatus?.(stored);
 					continue;
 				}
@@ -584,7 +588,7 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 		// restoration at load from scanning that directory when no active runs
 		// match.
 		if (allowedStates && !allowedStates.has(status.state)) continue;
-		if (options.sessionId && status.sessionId !== options.sessionId) continue;
+		if (owners && !owners.has(status.sessionId)) continue;
 		const nestedWarnings: string[] = [];
 		let nestedRoute: NestedRoute | undefined;
 		if (options.reconcile !== false && includeNested) {

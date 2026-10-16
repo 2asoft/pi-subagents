@@ -27,6 +27,7 @@ import { registerRuntimeAgentEventListener } from "../agents/runtime-agent-event
 import { ensureAccessibleDir } from "../shared/accessible-dir.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
+import { recordSessionReplacement } from "../shared/session-succession.ts";
 import { getAgentDir } from "../shared/utils.ts";
 import { isStaleExtensionContextError, MODEL_ONLY_TOOL, withCachedUiContext } from "../shared/extension-context.ts";
 import { currentCompletionOwnerId } from "../shared/completion-owner.ts";
@@ -880,9 +881,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		state.widgetsSuspended = false;
 		state.baseCwd = ctx.cwd;
 		goalTurnId = 0;
-		const previousRuntimeSessionId = state.currentSessionId;
-		resultDeliveryOwnership.claimPredecessor(previousSessionFile, previousRuntimeSessionId);
 		state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
+		// Pi passes previousSessionFile only for new/resume/fork, after tearing that session down in this process.
+		if (previousSessionFile) recordSessionReplacement(state.currentSessionId, previousSessionFile);
 		state.supervisorOwnerSessionId = ctx.sessionManager.getSessionId() || null;
 		transitionResultDelivery();
 		owedResultRunIds.clear();
@@ -981,7 +982,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			modulePreloadTimer = undefined;
 			asyncRetentionAbort.abort();
 			stopResultWatcher();
-			resultDeliveryOwnership.clear();
 			completionNotifier.dispose();
 			mainWatchdog.dispose();
 			scheduledRunManager.stop();
