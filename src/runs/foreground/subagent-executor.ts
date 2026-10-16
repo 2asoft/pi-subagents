@@ -4649,13 +4649,16 @@ function workflowChildResult(
 	forcedTerminalOutcome?: WorkflowTerminalOutcome,
 ): WorkflowScriptChildResult {
 	const running = missionWorkflowChildStatus(result) === "running";
-	const receiptOutput = result.content.map((part) => part.type === "text" ? part.text : "").filter(Boolean).join("\n");
+	// The receipt opens with the workflow-wide run fan-out line, which says nothing about this child.
+	const fanoutPrefix = result.details.runFanoutBudget ? `${formatRunFanoutBudget(result.details.runFanoutBudget)}\n` : undefined;
+	const fullReceipt = result.content.map((part) => part.type === "text" ? part.text : "").filter(Boolean).join("\n");
+	const receiptOutput = fanoutPrefix && fullReceipt.startsWith(fanoutPrefix) ? fullReceipt.slice(fanoutPrefix.length) : fullReceipt;
 	const output = running ? "" : result.details.results.length === 1 && result.details.results[0]?.finalOutput !== undefined
 		? result.details.results[0].finalOutput
 		: receiptOutput;
 	const childError = result.details.results.map((child) => child.error).find((error): error is string => Boolean(error));
 	const stopped = result.details.results.some((child) => child.stopped);
-	// A stopped child's receipt text carries the run fan-out annotation; report the structured stop reason instead.
+	// A stopped child reports its structured stop reason alone, without the receipt's output block.
 	const failureErrorBase = stopped && childError
 		? childError
 		: childError && receiptOutput
