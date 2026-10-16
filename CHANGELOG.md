@@ -5,6 +5,7 @@
 ### Added
 
 - The RPC `subagent-async` status snapshot now includes the `model` and `thinking` level each background step runs on, so hosts can show which model a child actually chose. Thanks to [@agustinsacco](https://github.com/agustinsacco) for [#2893](https://github.com/nicobailon/pi-subagents/pull/2893). ([#2892](https://github.com/nicobailon/pi-subagents/issues/2892))
+- Step nodes in the RPC `subagent-async` status snapshot now include the `agent` each child runs as. A workflow lane's label names the lane, not the agent, so hosts could not name a running member until the completion notice listed it. Thanks to [@kevinsleegerslameco](https://github.com/kevinsleegerslameco) for [#2912](https://github.com/nicobailon/pi-subagents/pull/2912). ([#2911](https://github.com/nicobailon/pi-subagents/issues/2911))
 
 ### Changed
 
