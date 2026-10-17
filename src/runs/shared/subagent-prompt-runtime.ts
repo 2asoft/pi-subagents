@@ -721,7 +721,7 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config?:
 		}
 		return Number.isFinite(inherited.forkedAt) ? inherited : undefined;
 	};
-	const boundary = rewritesChildPrompt(config) ? childBoundary({ fanoutChild: config.fanoutChild, structuredOutput: Boolean(config.structuredOutput) }) : undefined;
+	const boundary = config.agent !== DIRECT_TASK_AGENT && rewritesChildPrompt(config) ? childBoundary({ fanoutChild: config.fanoutChild, structuredOutput: Boolean(config.structuredOutput) }) : undefined;
 	if (config.forkCacheKey) onRuntimeEvent("before_provider_headers", (event: unknown, ctx?: ExtensionContext) => {
 		applyForkSessionAffinity((event as { headers?: Record<string, string | null | undefined> } | undefined)?.headers, ctx?.model, config.parentSessionId, readInherited(ctx)?.model);
 	});
