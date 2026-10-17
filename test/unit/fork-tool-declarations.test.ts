@@ -276,6 +276,25 @@ describe("a forked child session", () => {
 	});
 
 	const supervised = { runId: "run-s3", orchestratorIntercomTarget: "parent-target", parentSessionId: "parent-session" };
+	it("keeps a direct fork's caller instructions without a named-agent boundary", async () => {
+		// Arrange
+		const { forkFile, parentSystem } = await forkOfParent("direct-prompt");
+
+		// Act
+		const requests = await run({
+			sessionFile: forkFile, tools: ["read"], replies: [fauxAssistantMessage("done")], forkCacheKey: "pi-fork:test",
+			launch: { childAgentName: "$task", systemPrompt: "EXACT_DIRECT_RUBRIC", inheritProjectContext: false },
+		});
+
+		// Assert
+		const request = requests[0];
+		assert.ok(request);
+		const messages = request.messages;
+		assert.deepEqual(messages.filter((entry) => entry.role === "system"), parentSystem);
+		assert.match(text(messages.at(-1)), /EXACT_DIRECT_RUBRIC/);
+		assert.doesNotMatch(text(messages.at(-1)), /You are a child subagent/);
+	});
+
 	const callSupervisor = [
 		fauxAssistantMessage(fauxToolCall("contact_supervisor", { reason: "progress_update", message: "halfway" }, { id: "call_supervisor_1" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("done"),
