@@ -177,7 +177,7 @@ Missing namespace identity or inaccessible evidence prevents observed terminatio
 
 ## Verification and operations
 
-`test/smoke/clean-install.mjs <empty-artifact-directory> 1.2.0` verifies the compiled owner and worker from a disposable package installation through startup, supervisor replies and restart/resume. Its policy mounts both the host and extension dependency trees read-only, including hoisted dependencies. Standalone owners and metadata readers do not depend on Pi's host-peer loader.
+`test/smoke/clean-install.mjs <empty-artifact-directory> 1.3.0` verifies the compiled owner and worker from a disposable package installation through startup, supervisor replies and restart/resume. Its policy mounts both the host and extension dependency trees read-only, including hoisted dependencies. Standalone owners and metadata readers do not depend on Pi's host-peer loader.
 
 `test/integration/environment-lifecycle.test.ts` exercises real namespaces with orphaned detached descendants through completion, stop, interrupt, timeout, launcher death, monitor death, a FIFO result, a FIFO event file and a symlink at the event file. Launcher death coverage first records the production callback's unknown proof, then verifies recovery can upgrade it. It checks a forged worker PID against a separate sentinel process.
 
