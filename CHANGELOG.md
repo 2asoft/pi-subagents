@@ -2,18 +2,28 @@
 
 ## [Unreleased]
 
+## [0.79.1] - 2026-10-17
+
+### Highlights
+
+- Leaner requests until you delegate. A session that hasn't turned on `subagent` no longer sends the `bg_wait` and `subagent_supervisor` tool definitions, about 1,500 characters on every request.
+- Apps that embed Pi, such as pi-web, now launch children with their own Pi install instead of the copy that came with pi-subagents.
+- A workflow whose main process died keeps the results of children that had already finished, instead of marking them all failed.
+- Workflow child lanes in the widget, FleetView and `status` now show each child's model.
+- Read-only installs start without a "permission denied" error.
+
 ### Changed
 
-- A parent session that never delegates no longer declares `subagent_supervisor`, which saves about 420 characters of tool definition on every request. The tool now becomes active with `subagent`, or when a child request reaches a session that does not have it, for example from a scheduled run. A resumed session keeps it if its transcript declared it, so upgrading does not change an existing session's tools or miss its prompt cache. Thanks to [@armchairfuturist-code](https://github.com/armchairfuturist-code) for reporting [#2936](https://github.com/nicobailon/pi-subagents/issues/2936).
-- Every parent session declared `bg_wait` on every request, about 1,100 characters of tool definition, even when it never ran background work. With dynamic tool activation, a new parent session now declares `bg_wait` only together with `subagent` (after `subagents_enable`), or once another extension registers a background-work provider. Sessions that already declared it keep it, so resuming one after the upgrade does not miss the prompt cache. Thanks to [@armchairfuturist-code](https://github.com/armchairfuturist-code) for reporting [#2935](https://github.com/nicobailon/pi-subagents/issues/2935).
+- A session that hasn't delegated anything no longer sends `subagent_supervisor` with every request, saving about 420 characters each time. It turns on with `subagent`, or when a child's question reaches a session that doesn't have it yet, for example from a scheduled run. Thanks to [@armchairfuturist-code](https://github.com/armchairfuturist-code) for reporting [#2936](https://github.com/nicobailon/pi-subagents/issues/2936).
+- A session that hasn't delegated anything no longer sends `bg_wait` with every request, saving about 1,100 characters each time. It turns on with `subagent` (after `subagents_enable`), or once another extension registers background work for it to wait on. Sessions that already had `bg_wait` or `subagent_supervisor` keep them, so upgrading doesn't change their tools or break their prompt cache. Thanks to [@armchairfuturist-code](https://github.com/armchairfuturist-code) for reporting [#2935](https://github.com/nicobailon/pi-subagents/issues/2935).
 
 ### Fixed
 
-- Embedded hosts now resolve child SDK and CLI packages from the canonical host entry's dependency tree before the extension's own install, preserving explicit overrides for extensionless `.bin/pi` launches. Invalid selected SDK roots fail closed at launch while `doctor` and `status` remain usable. Thanks to [@CompN3rd](https://github.com/CompN3rd) for [#2947](https://github.com/nicobailon/pi-subagents/pull/2947).
-- When a workflow's owner process died, stale-run reconciliation marked every still-running child row failed, even a child whose detached runner had already finished. A detached child of that workflow that already wrote its own final status (`complete`, `failed`, `stopped`, `partial`, or `rejected`) now keeps that outcome; children that are unsettled, unreadable, or not owned by the workflow still inherit the owner failure. Thanks to [@isjiajia01](https://github.com/isjiajia01) for [#2940](https://github.com/nicobailon/pi-subagents/pull/2940) ([#2938](https://github.com/nicobailon/pi-subagents/issues/2938)).
-- A background workflow child showed no model on its lane in the async widget, FleetView, or `status` output, because only the child's own `status.json` recorded the resolved model. Lanes now fill a missing model and thinking level from the child run. Thanks to [@bottfish](https://github.com/bottfish) for [#2941](https://github.com/nicobailon/pi-subagents/pull/2941).
-- Attention notices for a child's `bash` call could show `path &1;` because a `2>&1` redirect was read as the file being written. The path now names the first real redirect target and is left out when the command only redirects to another descriptor or `/dev/null`. ([#2943](https://github.com/nicobailon/pi-subagents/issues/2943))
-- In a read-only install, every Pi start logged "Failed to show the pi-subagents upgrade notice: ... permission denied" because the notice could not save the last version it showed. When that file cannot be written, the notice is now skipped without an error. Thanks to [@jakubsuchy](https://github.com/jakubsuchy) for reporting [#2949](https://github.com/nicobailon/pi-subagents/issues/2949).
+- When pi-subagents ran inside an app that embeds Pi, children could start with the Pi copy installed next to pi-subagents instead of the app's own. Children now use the app's Pi first. `PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT` still takes priority, including when Pi is started through `node_modules/.bin/pi`. If the chosen Pi install is broken, launching a child fails and says why, while `doctor` and `status` keep working. Thanks to [@CompN3rd](https://github.com/CompN3rd) for [#2947](https://github.com/nicobailon/pi-subagents/pull/2947).
+- When a workflow's main process died, every child still listed as running was marked failed, even one that had already finished on its own. A background child that already recorded its result (`complete`, `failed`, `stopped`, `partial` or `rejected`) now keeps it. Children that hadn't finished, or whose status can't be read, are still marked failed. Thanks to [@isjiajia01](https://github.com/isjiajia01) for [#2940](https://github.com/nicobailon/pi-subagents/pull/2940) ([#2938](https://github.com/nicobailon/pi-subagents/issues/2938)).
+- A background workflow child showed no model on its lane in the async widget, FleetView or `status`. Lanes now show the model and thinking level the child reports. Thanks to [@bottfish](https://github.com/bottfish) for [#2941](https://github.com/nicobailon/pi-subagents/pull/2941).
+- Attention notices for a child's `bash` call could name `&1;` as the file being written, because `2>&1` was read as a file. The notice now names the first real file the command writes, and names none when the command only redirects to another output or `/dev/null`. ([#2943](https://github.com/nicobailon/pi-subagents/issues/2943))
+- In a read-only install, every Pi start logged "Failed to show the pi-subagents upgrade notice: ... permission denied", because the upgrade notice couldn't save which version it last showed. It now skips the notice quietly in that case. Thanks to [@jakubsuchy](https://github.com/jakubsuchy) for reporting [#2949](https://github.com/nicobailon/pi-subagents/issues/2949).
 
 ## [0.79.0] - 2026-10-17
 
