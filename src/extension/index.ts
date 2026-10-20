@@ -349,7 +349,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	// Every notice that wakes the parent goes through parentWake; the watchdog wakes only inside a run.
 	const parentWake = createParentWake(pi);
-	const wakingPi = { events: pi.events, sendMessage: parentWake.sendMessage, isHeld: parentWake.isHeld, on: pi.on };
+	const wakingPi = { events: pi.events, sendMessage: parentWake.sendMessage, isHeld: parentWake.isHeld, on: pi.on, appendEntry: (customType: string, data?: unknown) => pi.appendEntry(customType, data) };
 	const supervisorChannel = createNativeSupervisorChannel(pi, state, {
 		// Owner states are created only by scheduled execution, which loads the executor first.
 		getCurrentOwnerStates: () => executor?.getCurrentSupervisorOwnerStates() ?? [],
