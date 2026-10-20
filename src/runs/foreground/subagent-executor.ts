@@ -6030,6 +6030,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					const childOutputClaimPaths = new Map<string, string>();
 					const producedChildOutputPaths = new Set<string>();
 					const workflowSteps = new Map<string, NonNullable<AsyncStatus["steps"]>[number]>();
+					// Only a child that never reached a launch is certainly process-free: a resume launch spawns its runner
+					// before it reports the launch, so a stop during that window must not mark the step not async.
+					const dispatchedWorkflowChildKeys = new Set<string>();
 					const announcedWorkflowChildren = new Set<string>();
 					const announceWorkflowChild = (key: string, step: NonNullable<AsyncStatus["steps"]>[number]): void => {
 						if (announcedWorkflowChildren.has(key)) return;
@@ -6125,7 +6128,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								existing.status = mapped;
 								if (entry.agent) existing.agent = entry.agent;
 								if (entry.runId) existing.runId = entry.runId;
-								if (entry.state === "failed" && !entry.runId && existing.async === undefined) existing.async = false;
+								if ((entry.state === "failed" || (entry.state === "stopped" && !dispatchedWorkflowChildKeys.has(entry.key))) && !entry.runId && existing.async === undefined) existing.async = false;
 								if (entry.state === "detached") existing.activityState = "needs_attention";
 								else if (existing.status !== "running") delete existing.activityState;
 								if (entry.state === "stopped") existing.stopped = true;
@@ -6149,7 +6152,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 									startedAt: Date.now(),
 									...(entryPhase ? { phase: entryPhase } : {}),
 									...(entry.runId ? { runId: entry.runId } : {}),
-									...(entry.state === "failed" && !entry.runId ? { async: false } : {}),
+									...((entry.state === "failed" || (entry.state === "stopped" && !dispatchedWorkflowChildKeys.has(entry.key))) && !entry.runId ? { async: false } : {}),
 									...(entry.state === "detached" ? { activityState: "needs_attention" as const } : {}),
 									...(entry.state === "stopped" ? { stopped: true } : {}),
 								};
@@ -6180,6 +6183,16 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						projectWorkflowActivity();
 						persist({ tolerateStatusWriteFailure: true });
 						appendWorkflowEvent({ type: "subagent.workflow.trace", trace });
+					};
+					// A reused child launches nothing, so neither the launch observer nor the post-launch classification
+					// runs. Capacity release holds the workflow's slot while any step lacks `async`, so name the reused run
+					// and whether it ran detached (it has a run directory); its own process proof then decides.
+					const recordReusedWorkflowChild = (key: string, runId: string | undefined): void => {
+						const step = status.steps?.find((candidate) => candidate.workflowKey === key);
+						if (!step) return;
+						if (runId) step.runId = runId;
+						step.async = runId !== undefined && path.basename(runId) === runId && fs.existsSync(path.join(path.dirname(asyncDir), runId));
+						persist({ tolerateStatusWriteFailure: true });
 					};
 					try {
 						const workflow = await runWorkflowScript({
@@ -6272,6 +6285,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								const priorChild = workflowReuseSource ? matchWorkflowReuse(workflowReuseSource, key, journalFingerprint) : undefined;
 								if (priorChild?.kind === "settled") {
 									if (priorChild.result.runId) workflowChildRunIds.set(key, priorChild.result.runId);
+									recordReusedWorkflowChild(key, priorChild.result.runId);
 									return { ...priorChild.result, reused: true };
 								}
 								if (priorChild?.kind === "started") {
@@ -6280,6 +6294,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 									const priorRunId = priorChild.runId;
 									const priorAsyncDir = path.join(DIRS.async, priorRunId);
 									appendWorkflowChildJournal(asyncDir, { type: "start", key, fingerprint: journalFingerprint, runId: priorRunId });
+									recordReusedWorkflowChild(key, priorRunId);
 									const stopListener = stopAwaitedAsyncChildOnAbort(workflowSignal, deps.state, priorRunId, priorAsyncDir, deps.kill, requestParams.reuseFrom !== undefined);
 									const reattached = await awaitExistingAsyncRun(priorAsyncDir, priorRunId, workflowSignal).finally(stopListener.remove);
 									const claimedPath = reattached.status === "settled" ? claimWorkflowAwaitedResult(priorAsyncDir, workflowRunId, { ...reattached.result.importedPublication, runId: priorRunId }) : undefined;
@@ -6293,6 +6308,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 										}
 									}
 								}
+								dispatchedWorkflowChildKeys.add(key);
 								if (workflowUsageBudget.budget && childParams.async === true) return workflowChildResult(key, buildRequestedModeError(childParams as SubagentParamsLike, "workflow usageBudget does not support async runs.run launches."), childParams, deps.state);
 								const budgetState = usageBudgetState(workflowUsageBudget.budget, sumResultsCost(workflowResults));
 								if (budgetState?.exhausted) return workflowChildResult(key, buildRequestedModeError(childParams as SubagentParamsLike, usageBudgetExceededMessage(budgetState)), childParams, deps.state, { state: "partial", reason: "budget_exhausted" });
