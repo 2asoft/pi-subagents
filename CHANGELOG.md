@@ -2,30 +2,21 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Subagent cards said "Configure the expand key for live detail" whenever Pi's app keybindings were not loaded in the process, for example in an HTML session export, although the key was bound (`ctrl+o` by default). The hint now reads "Press the expand key for live detail" there, as the `[subagent]` chat messages already fall back to "click". In RPC mode the status line of slash-command launches such as `/run` no longer shows an empty key (`3 tools |  live detail`). Thanks to [@JohannesBertens](https://github.com/JohannesBertens) for [#2983](https://github.com/nicobailon/pi-subagents/pull/2983) ([#2982](https://github.com/nicobailon/pi-subagents/issues/2982)).
-
 ### Added
 
 - Children of the built-in `parallel` workflow (`args.tasks`), and `tasks` items and `chain` steps and group members when workflow scripts are disabled, accept optional `cwd` and `model`. One call can now fan out across several repositories or worktrees, or mix models, without writing a script. Before, these fields were rejected with "accepts only agent and task". They reach `runs.all` as data, like `task`. The structured-mode `tasks`/`chain` schema grows from 737 to 911 characters. Thanks to [@andresutre](https://github.com/andresutre) for [#2985](https://github.com/nicobailon/pi-subagents/pull/2985).
 - The folded async widget line now shows how long the current stretch of running work has lasted, for example `subagents (1/1 running 13s)`. It counts from the oldest running job, so it also stays right after a session resume, and it disappears once nothing is running. Thanks to [@summer-tt](https://github.com/summer-tt) for [#2979](https://github.com/nicobailon/pi-subagents/pull/2979).
-
-### Fixed
-
-- Children on a custom provider that speaks the Codex Responses wire under its own api id, such as `pi-cliproxyapi`'s `cliproxyapi-codex-responses`, had their tool-call ids rewritten, and DeepSeek rejected the second tool turn with a misleading "`reasoning_text` ... must be passed back" error. Any `*-codex-responses` api now keeps its ids the way `openai-codex-responses` does. Thanks to [@xspeed1989](https://github.com/xspeed1989) for reporting [#2981](https://github.com/nicobailon/pi-subagents/issues/2981).
+- `enableSlashCommands: false` in the extension config keeps the `subagent` tool and drops every pi-subagents slash command and the foreground-detach shortcut, for setups that delegate only through the model or that want fewer global commands. Prompt shortcuts such as `/parallel-review` are Pi prompt templates; Pi's package filter (`"prompts": []`) already removes them. See [configuration](docs/configuration.md#enableslashcommands). Thanks to [@khavronin-artem](https://github.com/khavronin-artem) for requesting it in [#2977](https://github.com/nicobailon/pi-subagents/issues/2977).
 
 ### Changed
 
 - The npm package no longer ships source maps. They pointed at TypeScript sources the package does not include, so they could not be used, and they were 646 of its 1,339 files: the unpacked install drops from 12.1 MB to 6.8 MB and the download from 2.5 MB to 1.6 MB. Thanks to [@tututuhehehe](https://github.com/tututuhehehe) for reporting it in [#2980](https://github.com/nicobailon/pi-subagents/issues/2980).
 
-### Added
-
-- `enableSlashCommands: false` in the extension config keeps the `subagent` tool and drops every pi-subagents slash command and the foreground-detach shortcut, for setups that delegate only through the model or that want fewer global commands. Prompt shortcuts such as `/parallel-review` are Pi prompt templates; Pi's package filter (`"prompts": []`) already removes them. See [configuration](docs/configuration.md#enableslashcommands). Thanks to [@khavronin-artem](https://github.com/khavronin-artem) for requesting it in [#2977](https://github.com/nicobailon/pi-subagents/issues/2977).
-
 ### Fixed
 
 - Pi could exit at session start on Windows when security software stopped it from launching `git` (`spawn EPERM`), because that error escaped the watchdog's diff baseline capture unhandled. The watchdog now starts without a diff baseline in that case, as it already did when `git` was missing. Thanks to [@advaitpaliwal](https://github.com/advaitpaliwal) for reporting [#2978](https://github.com/nicobailon/pi-subagents/issues/2978).
+- Children on a custom provider that speaks the Codex Responses wire under its own api id, such as `pi-cliproxyapi`'s `cliproxyapi-codex-responses`, had their tool-call ids rewritten, and DeepSeek rejected the second tool turn with a misleading "`reasoning_text` ... must be passed back" error. Any `*-codex-responses` api now keeps its ids the way `openai-codex-responses` does. Thanks to [@xspeed1989](https://github.com/xspeed1989) for reporting [#2981](https://github.com/nicobailon/pi-subagents/issues/2981).
+- Subagent cards said "Configure the expand key for live detail" whenever Pi's app keybindings were not loaded in the process, for example in an HTML session export, although the key was bound (`ctrl+o` by default). The hint now reads "Press the expand key for live detail" there, as the `[subagent]` chat messages already fall back to "click". In RPC mode the status line of slash-command launches such as `/run` no longer shows an empty key (`3 tools |  live detail`). Thanks to [@JohannesBertens](https://github.com/JohannesBertens) for [#2983](https://github.com/nicobailon/pi-subagents/pull/2983) ([#2982](https://github.com/nicobailon/pi-subagents/issues/2982)).
 
 ## [0.79.2] - 2026-10-20
 
