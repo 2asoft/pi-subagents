@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The npm package no longer ships source maps. They pointed at TypeScript sources the package does not include, so they could not be used, and they were 646 of its 1,339 files: the unpacked install drops from 12.1 MB to 6.8 MB and the download from 2.5 MB to 1.6 MB. Thanks to [@tututuhehehe](https://github.com/tututuhehehe) for reporting it in [#2980](https://github.com/nicobailon/pi-subagents/issues/2980).
+
 ### Added
 
 - `enableSlashCommands: false` in the extension config keeps the `subagent` tool and drops every pi-subagents slash command and the foreground-detach shortcut, for setups that delegate only through the model or that want fewer global commands. Prompt shortcuts such as `/parallel-review` are Pi prompt templates; Pi's package filter (`"prompts": []`) already removes them. See [configuration](docs/configuration.md#enableslashcommands). Thanks to [@khavronin-artem](https://github.com/khavronin-artem) for requesting it in [#2977](https://github.com/nicobailon/pi-subagents/issues/2977).
