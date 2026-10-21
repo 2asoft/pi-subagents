@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Subagent cards said "Configure the expand key for live detail" whenever Pi's app keybindings were not loaded in the process, for example in an HTML session export, although the key was bound (`ctrl+o` by default). The hint now reads "Press the expand key for live detail" there, as the `[subagent]` chat messages already fall back to "click". In RPC mode the status line of slash-command launches such as `/run` no longer shows an empty key (`3 tools |  live detail`). Thanks to [@JohannesBertens](https://github.com/JohannesBertens) for [#2983](https://github.com/nicobailon/pi-subagents/pull/2983) ([#2982](https://github.com/nicobailon/pi-subagents/issues/2982)).
+
 ### Added
 
 - Children of the built-in `parallel` workflow (`args.tasks`), and `tasks` items and `chain` steps and group members when workflow scripts are disabled, accept optional `cwd` and `model`. One call can now fan out across several repositories or worktrees, or mix models, without writing a script. Before, these fields were rejected with "accepts only agent and task". They reach `runs.all` as data, like `task`. The structured-mode `tasks`/`chain` schema grows from 737 to 911 characters. Thanks to [@andresutre](https://github.com/andresutre) for [#2985](https://github.com/nicobailon/pi-subagents/pull/2985).

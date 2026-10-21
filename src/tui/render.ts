@@ -86,16 +86,16 @@ function capCompactMainWindowResult(component: Component, layout: MainWindowRend
 		if (lines.length <= maxLines) return lines;
 		const visibleRows = maxLines === 1 ? 1 : maxLines - 1;
 		const hiddenCount = lines.length - visibleRows;
-		const hint = theme.fg("accent", `… ${hiddenCount} rows hidden · ${expandKeyHint("to expand", "to view them")}`);
+		const hint = theme.fg("accent", `… ${hiddenCount} rows hidden · ${expandKeyHint("to expand")}`);
 		if (maxLines === 1) return [truncLine(`${lines[0] ?? ""} ${hint}`, width)];
 		return [...lines.slice(0, visibleRows), truncLine(hint, width)];
 	};
 	return capped;
 }
 
-function expandKeyHint(action: string, unconfiguredAction = action): string {
-	const shortcut = keyText("app.tools.expand");
-	return shortcut ? `Press ${shortcut} ${action}` : `Configure the expand key ${unconfiguredAction}`;
+function expandKeyHint(action: string): string {
+	// keyText is empty wherever Pi's app keybindings are not loaded (RPC, print mode), even when the key is bound.
+	return `Press ${keyText("app.tools.expand") || "the expand key"} ${action}`;
 }
 
 export function liveDetailHintText(): string {
@@ -2790,7 +2790,7 @@ function fitWidgetLineBudget(lines: string[], theme: Theme, width: number, expan
 	const hiddenCount = lines.length - visibleLines;
 	const hint = expanded
 		? `… ${hiddenCount} live-detail lines hidden`
-		: `… ${hiddenCount} lines hidden · ${expandKeyHint("to expand", "to view them")}`;
+		: `… ${hiddenCount} lines hidden · ${expandKeyHint("to expand")}`;
 	return [...lines.slice(0, visibleLines), truncLine(theme.fg("dim", hint), width)];
 }
 
