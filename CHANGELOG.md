@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Children on a custom provider that speaks the Codex Responses wire under its own api id, such as `pi-cliproxyapi`'s `cliproxyapi-codex-responses`, had their tool-call ids rewritten, and DeepSeek rejected the second tool turn with a misleading "`reasoning_text` ... must be passed back" error. Any `*-codex-responses` api now keeps its ids the way `openai-codex-responses` does. Thanks to [@xspeed1989](https://github.com/xspeed1989) for reporting [#2981](https://github.com/nicobailon/pi-subagents/issues/2981).
+
 ### Changed
 
 - The npm package no longer ships source maps. They pointed at TypeScript sources the package does not include, so they could not be used, and they were 646 of its 1,339 files: the unpacked install drops from 12.1 MB to 6.8 MB and the download from 2.5 MB to 1.6 MB. Thanks to [@tututuhehehe](https://github.com/tututuhehehe) for reporting it in [#2980](https://github.com/nicobailon/pi-subagents/issues/2980).
