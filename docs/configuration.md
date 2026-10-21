@@ -150,8 +150,8 @@ Disabling a per-call option removes only the per-call override. Configured defau
 
 `workflow-scripts` removes workflow scripts and named workflow resources from every entry point. The model can no longer write a script, and a script that still arrives from RPC `spawn` (`script` or `workflow`), `/prompt-workflow`, a saved schedule, or a delegated launch fails with an error that names the setting. Schedule inspection, pause, and delete still work, but `schedule.create` cannot succeed because it needs a script. `/run` still works: it launches its one child directly. The built-in tool description and prompt snippet drop the script guidance and describe two small inputs instead:
 
-- `tasks: [{ agent, task }, ...]` runs the children in parallel and returns their results in order.
-- `chain: [step, ...]` runs steps in order. A step is `{ agent, task?, as? }` or a parallel group `{ parallel: [{ agent, task }, ...] }`. A group waits for all of its children.
+- `tasks: [{ agent, task, cwd?, model? }, ...]` runs the children in parallel and returns their results in order.
+- `chain: [step, ...]` runs steps in order. A step is `{ agent, task?, as?, cwd?, model? }` or a parallel group `{ parallel: [{ agent, task, cwd?, model? }, ...] }`. A group waits for all of its children. `cwd` and `model` are optional and apply to that one child.
 
 A top-level `task` is the original request. Tasks can use three placeholders:
 

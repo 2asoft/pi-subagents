@@ -4,6 +4,7 @@
 
 ### Added
 
+- Children of the built-in `parallel` workflow (`args.tasks`), and `tasks` items and `chain` steps and group members when workflow scripts are disabled, accept optional `cwd` and `model`. One call can now fan out across several repositories or worktrees, or mix models, without writing a script. Before, these fields were rejected with "accepts only agent and task". They reach `runs.all` as data, like `task`. The structured-mode `tasks`/`chain` schema grows from 737 to 911 characters. Thanks to [@andresutre](https://github.com/andresutre) for [#2985](https://github.com/nicobailon/pi-subagents/pull/2985).
 - The folded async widget line now shows how long the current stretch of running work has lasted, for example `subagents (1/1 running 13s)`. It counts from the oldest running job, so it also stays right after a session resume, and it disappears once nothing is running. Thanks to [@summer-tt](https://github.com/summer-tt) for [#2979](https://github.com/nicobailon/pi-subagents/pull/2979).
 
 ### Fixed
