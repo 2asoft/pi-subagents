@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Structured delegation `:update` and `:response` events now carry an optional `providerDiagnostics` field, so a host extension can tell a child stuck in provider retry backoff (for example HTTP 429) from a long model turn. It reports the count and kind of failed requests and Pi's current retry phase, never the raw provider error. See [docs/extension-api.md](docs/extension-api.md). Thanks to [@IdrisGit](https://github.com/IdrisGit) for #2999 and [@legendtang](https://github.com/legendtang) for [#2991](https://github.com/nicobailon/pi-subagents/issues/2991).
+
 ### Fixed
 
 - On Windows, Pi could freeze for about 8 seconds on every start when the subagent temp results directory had broken permissions (`EPERM`/`EACCES`), because the startup check ran the full file-system retry ladder before switching to its per-process fallback directory. The startup check now retries for at most 85 ms per operation before falling back; result writes and other file operations keep the full retry ladder. Thanks to [@821869798](https://github.com/821869798) for [#2998](https://github.com/nicobailon/pi-subagents/issues/2998).
