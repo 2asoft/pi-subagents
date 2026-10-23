@@ -1311,7 +1311,7 @@ export interface SingleResult {
 	usage: Usage;
 	model?: string;
 	/** Authoritative before/after Git evidence captured by a pane-native remote machine. */
-	nativeMachine?: { provider: "herdr"; machineId: string; initialGit?: HerdrRemoteGitStatus; finalGit?: HerdrRemoteGitStatus };
+	nativeMachine?: { provider: PlacementMachineReference["provider"]; machineId: string; initialGit?: HerdrRemoteGitStatus; finalGit?: HerdrRemoteGitStatus };
 	/** Effective thinking level used by this foreground child, when known. */
 	thinking?: string;
 	requestedModel?: string;
@@ -1797,6 +1797,18 @@ export interface HerdrMachineReference {
 	session?: string;
 	cwd: string;
 }
+
+/** `machine: "local"`: a Rex pane in the parent's own Rex session on this machine. `session` is the Rex session id and `server` the Rex server address, both recorded in the parent at resolution time; `cwd` is the local launch directory. */
+export interface RexMachineReference {
+	provider: "rex";
+	id: "local";
+	session: string;
+	server?: string;
+	cwd: string;
+}
+
+/** Where a placed native Pi child runs. */
+export type PlacementMachineReference = HerdrMachineReference | RexMachineReference;
 
 export interface ExternalCliMachineStatus extends HerdrMachineReference {
 	remoteGit?: HerdrRemoteGitStatus;
@@ -2507,7 +2519,7 @@ export interface RunSyncOptions {
 	context?: "fresh" | "fork";
 	cwd?: string;
 	/** Resolved pane-native saved-machine placement. */
-	machine?: HerdrMachineReference;
+	machine?: PlacementMachineReference;
 	/** Explicit read override resolved by the remote ambient agent profile. */
 	remoteReads?: string[] | false;
 	/** Original cwd input retained for launch diagnostics. */
