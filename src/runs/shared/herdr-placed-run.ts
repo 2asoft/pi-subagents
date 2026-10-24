@@ -12,6 +12,7 @@ import { encodeHerdrPiFrame, HERDR_PI_MODE_ENV, HERDR_PI_PROTOCOL, HERDR_PI_RUN_
 import { discoverPlacedBridgeManifest, type PlacedBridgeManifest, type PlacedRunOwner } from "./placed-run-owner.ts";
 import type { PlacementBridgeIdentity, PlacementPaneHost, PlacementReconnectCheck, PlacementRunState, PlacementSockets } from "./placement-host.ts";
 import { RexPlacedRunOwner } from "./rex-pane-host.ts";
+import { isRexLocalMachine } from "./rex-machine.ts";
 
 export interface HerdrRunIdentity { runId: string; machineId: string; target: string; session: string | null; workspaceId: string; tabId: string; paneId: string; terminalId: string; agentName: string; nativeSessionId: string; cwd: string; runtimeDir: string }
 export interface HerdrRunSnapshot { connection: "connected" | "unknown" | "closed"; state: PlacementRunState; identity?: HerdrRunIdentity; revision: number }
@@ -135,11 +136,11 @@ export async function createHerdrPiSession(launch: ChildSessionLaunch): Promise<
 	return startPlacedPiSession(launch, await HerdrPlacedRunOwner.create(launch.machine, runId), policy, launch.machine.target);
 }
 
-/** `machine: "local"`: the same bridge session, with the Rex pane host and local machine access. */
+/** A Rex machine: the same bridge session, with the Rex pane host and local (`machine: "local"`) or SSH machine access. */
 export async function createRexPiSession(launch: ChildSessionLaunch): Promise<ChildSession> {
-	if (launch.machine?.provider !== "rex") throw new Error("Rex pane-native Pi launch requires machine 'local'.");
+	if (launch.machine?.provider !== "rex") throw new Error("Rex pane-native Pi launch requires a Rex machine.");
 	const policy = serializeHerdrPiLaunch(launch); const runId = safeRunId(launch.runtime.runId);
-	return startPlacedPiSession(launch, await RexPlacedRunOwner.create(launch.machine, runId), policy, launch.machine.id);
+	return startPlacedPiSession(launch, await RexPlacedRunOwner.create(launch.machine, runId), policy, isRexLocalMachine(launch.machine) ? launch.machine.id : launch.machine.target);
 }
 
 async function startPlacedPiSession<C extends PlacementSockets>(launch: ChildSessionLaunch, owner: PlacedRunOwner<C>, policy: ReturnType<typeof serializeHerdrPiLaunch>, target: string): Promise<ChildSession> {
@@ -147,7 +148,7 @@ async function startPlacedPiSession<C extends PlacementSockets>(launch: ChildSes
 	try {
 		let reconnectSession: { reconnect(): Promise<void> } | undefined; const agentName = `pi-${runId.slice(-20)}`;
 		const { owned, terminalId } = await owner.launch({ kind: "pi", name: agentName, args: policy.args, environment: { [HERDR_PI_MODE_ENV]: "1", [HERDR_PI_RUN_ENV]: runId, [HERDR_PI_RUNTIME_DIR_ENV]: runtimeDir } }, () => owner.subscribe((event) => observeHerdr?.(event), () => void reconnectSession?.reconnect()));
-		const manifest = await discoverPlacedBridgeManifest(owner.access, runId, runtimeDir); if (manifest.protocol !== HERDR_PI_PROTOCOL || manifest.packageVersion !== packageJson.version) throw new Error(`Remote pi-subagents bridge version mismatch (remote ${manifest.packageVersion}, local ${packageJson.version}).`);
+		const manifest = await discoverPlacedBridgeManifest(owner.access, runId, runtimeDir, "The placed Pi did not start the pi-subagents bridge, so its pane was closed. Start pi in a new pane on that machine to see why: it may wait on a prompt (such as a macOS folder-access prompt for the terminal app), exit at startup, or not load the same pi-subagents version as an extension."); if (manifest.protocol !== HERDR_PI_PROTOCOL || manifest.packageVersion !== packageJson.version) throw new Error(`Remote pi-subagents bridge version mismatch (remote ${manifest.packageVersion}, local ${packageJson.version}).`);
 		const bridgeForward = await connection.forwardRemoteSocket(manifest.socketPath, "bridge"); const bridge = new BridgeChannel(bridgeForward.socketPath, runId);
 		const ready = await waitForReadyBridgeFrame(bridge, 15_000, "Remote Pi bridge handshake timed out.");
 		if (ready.packageVersion !== packageJson.version || ready.nativeSessionId !== manifest.nativeSessionId || ready.cwd !== machine.cwd) throw new Error("Remote Pi bridge handshake identity mismatch.");
