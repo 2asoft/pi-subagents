@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Updated `undici` from 8.10.2 to 8.12.3, outside the range of [GHSA-xjj6-f33q-929c](https://github.com/advisories/GHSA-xjj6-f33q-929c), so projects that install pi-subagents no longer fail `npm audit` because of it. Thanks to [@setanta00](https://github.com/setanta00) for #3022.
 - When `bg_wait` returned at once because a run that was still working needed attention, such as a long `bash` command or a quiet stretch, nothing told the caller how to keep waiting, so agents kept calling it in a loop. The result now says the run is still running and that `bg_wait` with `stopOnAttention: false` waits through this, and the option's descriptions now say it waits through all attention except supervisor requests. Thanks to [@jettoblack](https://github.com/jettoblack) for #3019.
 - A child agent's `MEMORY.md` that is a named pipe (FIFO) no longer stalls its launch while the prompt is built; it is skipped like any other file that is not a regular file. Thanks to [@XLi-hub](https://github.com/XLi-hub) for #3027.
 - A background run still working when Pi exited or crashed never reported its result, even after you reopened its session. Its result now shows once in the reopened session, right away if the run already finished or as soon as it finishes. While the Pi that started the run is open, other Pi windows on the same session don't receive it.
