@@ -1539,9 +1539,9 @@ export interface Details {
 		argsDigest?: string;
 		/** SHA-256 of the workflow script source (async workflows). */
 		scriptDigest?: string;
-		/** Structured stop cause; set only when the owning extension runtime was replaced. */
-		stopCause?: "runtime-replaced";
-		/** Runtime-replaced workflow run whose finished children this run reused. */
+		/** Structured stop cause: `runtime-replaced` when the owning extension runtime was replaced; `owner-exited` when stale-run reconciliation found the owning Pi process dead. */
+		stopCause?: "runtime-replaced" | "owner-exited";
+		/** Interrupted workflow run whose finished children this run reused. */
 		reusedFrom?: string;
 		resource?: WorkflowResourceProvenance;
 		preflightWarnings?: string[];
@@ -1558,7 +1558,7 @@ export interface Details {
 			generatedLaneKey?: string;
 			warning?: string;
 			error?: string;
-			/** Came from a previous runtime-replaced run of the same script (and args, unless named by options.reuseFrom); this run launched nothing. */
+			/** Came from a previous runtime-replaced or owner-exited run of the same script (and args, unless named by options.reuseFrom); this run launched nothing. */
 			reused?: boolean;
 		}>;
 		emits: unknown[];
@@ -1961,6 +1961,8 @@ export interface AsyncStatus {
 	pid?: number;
 	/** Linux PID namespace identity used to scope liveness probes. */
 	pidNamespaceScope?: string;
+	/** Boot id of the machine when `pid` was recorded; a different current boot id proves the pid dead. */
+	bootId?: string;
 	cwd?: string;
 	/** User-configured launcher that wrapped the background runner (argv only, never environment). */
 	launcher?: RunnerLauncher;
@@ -2233,6 +2235,12 @@ export interface ForegroundResumeRun {
 	sessionId?: string;
 	updatedAt: number;
 	children: ForegroundResumeChild[];
+	/** Pi process running this run; only on records whose child is `running`. */
+	ownerPid?: number;
+	ownerPidNamespaceScope?: string;
+	ownerBootId?: string;
+	/** Workflow that launched this foreground child. */
+	parentWorkflowRunId?: string;
 }
 
 export interface ForegroundChildControl {

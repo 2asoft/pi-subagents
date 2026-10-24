@@ -17,7 +17,7 @@ import {
 	updateForegroundChild,
 } from "./foreground-control.ts";
 import { getLivePromptAudit, rewritePromptWithGuidance, updateLiveEffectivePrompt } from "./prompt-audit.ts";
-import { persistForegroundRunHistory, MAX_REMEMBERED_FOREGROUND_RUNS } from "./foreground-history.ts";
+import { discardRunningForegroundRun, persistForegroundRun, MAX_REMEMBERED_FOREGROUND_RUNS } from "./foreground-history.ts";
 import { projectScopeRequiresTrustMessage, resolveExecutionAgentScope } from "../../agents/agent-scope.ts";
 import { handleManagementAction } from "../../agents/agent-management.ts";
 import { handleRefinementAction } from "../../agents/agent-refinements.ts";
@@ -101,6 +101,8 @@ import { dismissRecoveredWorkflow } from "./async-dismiss-action.ts";
 import { inheritedSessionIds } from "../../shared/session-succession.ts";
 import { promotePausedWorkflowIfSettled, reconcileDetachedWorkflowChildCompletion } from "./workflow-detach-reconcile.ts";
 import { reconcileAsyncRun } from "../background/stale-run-reconciler.ts";
+import { currentBootId } from "../background/boot-id.ts";
+import { currentPidNamespaceScope } from "../background/pid-namespace.ts";
 import { resolveAsyncRootResultPath, waitForImportedAsyncRoot } from "../background/chain-root-attachment.ts";
 import { awaitExistingAsyncRun, claimWorkflowAwaitedResult } from "../background/await-async-run.ts";
 import { fallbackResultPayloadPathForSessionRun, resultFilePath, retireResultSnapshot, writeAsyncResultFile } from "../background/result-files.ts";
@@ -752,9 +754,11 @@ function trimRememberedForegroundRuns(state: SubagentState): void {
 	}
 }
 
-function persistRememberedForegroundRuns(state: SubagentState): void {
+function persistRememberedForegroundRun(state: SubagentState, runId: string): void {
+	const run = state.foregroundRuns?.get(runId);
+	if (!run) return;
 	try {
-		persistForegroundRunHistory(state);
+		persistForegroundRun(run);
 	} catch (error) {
 		console.error("Failed to persist foreground run history:", error);
 	}
@@ -775,7 +779,54 @@ function foregroundChildActivityFromProgress(progress: SingleResult["progress"] 
 	};
 }
 
-function rememberForegroundRun(state: SubagentState, input: { modelResponseAliases?: Record<string, string[]>; runId: string; mode: "single" | "parallel" | "chain"; cwd: string; sessionId: string | null; results: SingleResult[]; params: SubagentParamsLike; effectiveOutput?: string | boolean; effectiveOutputMode: OutputMode; extensionBindings?: ExtensionBindings; requiredExtensions?: SteeringRecoveryDescriptor["requiredExtensions"] }): void {
+type RememberedForegroundRunInput = { modelResponseAliases?: Record<string, string[]>; runId: string; mode: "single" | "parallel" | "chain"; cwd: string; sessionId: string | null; params: SubagentParamsLike; effectiveOutput?: string | boolean; effectiveOutputMode: OutputMode; extensionBindings?: ExtensionBindings; requiredExtensions?: SteeringRecoveryDescriptor["requiredExtensions"] };
+
+/** One remembered child: the result's outcome plus the launch contract that resume needs. */
+function rememberedForegroundChild(input: RememberedForegroundRunInput, result: Partial<SingleResult> & Pick<SingleResult, "agent">, index: number, status: ForegroundResumeChild["status"], updatedAt: number): ForegroundResumeChild {
+	const resumeContract = omitUndefinedProperties({
+		modelResponseAliases: input.modelResponseAliases,
+		outputSchema: input.params.outputSchema,
+		agentContract: input.params.agentContract,
+		acceptance: input.params.acceptance,
+		output: input.effectiveOutput,
+		outputMode: input.effectiveOutputMode,
+	});
+	return {
+		agent: result.agent,
+		index,
+		...(result.sessionName ? { sessionName: result.sessionName } : {}),
+		...(result.context ? { context: result.context } : {}),
+		status,
+		...foregroundChildActivityFromProgress(result.progress),
+		updatedAt,
+		...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+		...(result.error ? { error: result.error } : {}),
+		...(result.finalOutput ? { finalOutput: result.finalOutput } : {}),
+		...(result.outputState ? { outputState: result.outputState } : {}),
+		...(result.outputPartial ? { outputPartial: true } : {}),
+		...(result.outputMode ? { outputMode: result.outputMode } : {}),
+		...(result.savedOutputPath ? { savedOutputPath: result.savedOutputPath } : {}),
+		...(result.outputSaveError ? { outputSaveError: result.outputSaveError } : {}),
+		...(result.sessionFile ? { sessionFile: result.sessionFile } : {}),
+		...(result.model ? { model: result.model } : {}),
+		...(result.thinking ? { thinking: result.thinking } : {}),
+		...(result.artifactPaths ? { artifactPaths: result.artifactPaths } : {}),
+		...(result.transcriptPath ? { transcriptPath: result.transcriptPath } : {}),
+		...(result.transcriptError ? { transcriptError: result.transcriptError } : {}),
+		...(result.detachedReason ? { detachedReason: result.detachedReason } : {}),
+		...(result.acceptance ? { acceptance: result.acceptance } : {}),
+		...(Object.keys(resumeContract).length ? { resumeContract } : {}),
+		...(result.launchContractDigest ? { launchContractDigest: result.launchContractDigest } : {}),
+		...(input.extensionBindings ? { extensionBindings: input.extensionBindings } : {}),
+		...(input.requiredExtensions?.length ? { requiredExtensions: input.requiredExtensions } : {}),
+		...(result.launchResolvedExtensions ? { launchResolvedExtensions: result.launchResolvedExtensions } : {}),
+		...(result.runtimeAcknowledgedExtensions ? { runtimeAcknowledgedExtensions: result.runtimeAcknowledgedExtensions } : {}),
+		...(result.capabilityCeiling ? { capabilityCeiling: result.capabilityCeiling } : {}),
+		...(result.capabilityAudit ? { capabilityAudit: result.capabilityAudit } : {}),
+	};
+}
+
+function rememberForegroundRun(state: SubagentState, input: RememberedForegroundRunInput & { results: SingleResult[] }): void {
 	state.foregroundRuns ??= new Map();
 	const previous = state.foregroundRuns.get(input.runId);
 	const updatedAt = Date.now();
@@ -786,61 +837,43 @@ function rememberForegroundRun(state: SubagentState, input: { modelResponseAlias
 		...(input.sessionId ? { sessionId: input.sessionId } : {}),
 		updatedAt,
 		children: input.results.map((result, index) => {
-			const resumeContract = omitUndefinedProperties({
-				modelResponseAliases: input.modelResponseAliases,
-				outputSchema: input.params.outputSchema,
-				agentContract: input.params.agentContract,
-				acceptance: input.params.acceptance,
-				output: input.effectiveOutput,
-				outputMode: input.effectiveOutputMode,
-			});
-			const child = {
-				agent: result.agent,
-				index,
-				...(result.sessionName ? { sessionName: result.sessionName } : {}),
-				...(result.context ? { context: result.context } : {}),
-				status: resolveSubagentResultStatus(omitUndefinedProperties({
-					exitCode: result.exitCode,
-					interrupted: result.interrupted,
-					detached: result.detached,
-					processSignal: result.processSignal,
-					timedOut: result.timedOut,
-					stopped: result.stopped,
-					turnBudgetExceeded: result.turnBudgetExceeded,
-				})),
-				...foregroundChildActivityFromProgress(result.progress),
-				updatedAt,
-				...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
-				...(result.error ? { error: result.error } : {}),
-				...(result.finalOutput ? { finalOutput: result.finalOutput } : {}),
-				...(result.outputState ? { outputState: result.outputState } : {}),
-				...(result.outputPartial ? { outputPartial: true } : {}),
-				...(result.outputMode ? { outputMode: result.outputMode } : {}),
-				...(result.savedOutputPath ? { savedOutputPath: result.savedOutputPath } : {}),
-				...(result.outputSaveError ? { outputSaveError: result.outputSaveError } : {}),
-				...(result.sessionFile ? { sessionFile: result.sessionFile } : {}),
-				...(result.model ? { model: result.model } : {}),
-				...(result.thinking ? { thinking: result.thinking } : {}),
-				...(result.artifactPaths ? { artifactPaths: result.artifactPaths } : {}),
-				...(result.transcriptPath ? { transcriptPath: result.transcriptPath } : {}),
-				...(result.transcriptError ? { transcriptError: result.transcriptError } : {}),
-				...(result.detachedReason ? { detachedReason: result.detachedReason } : {}),
-				...(result.acceptance ? { acceptance: result.acceptance } : {}),
-				...(Object.keys(resumeContract).length ? { resumeContract } : {}),
-				...(result.launchContractDigest ? { launchContractDigest: result.launchContractDigest } : {}),
-				...(input.extensionBindings ? { extensionBindings: input.extensionBindings } : {}),
-				...(input.requiredExtensions?.length ? { requiredExtensions: input.requiredExtensions } : {}),
-				...(result.launchResolvedExtensions ? { launchResolvedExtensions: result.launchResolvedExtensions } : {}),
-				...(result.runtimeAcknowledgedExtensions ? { runtimeAcknowledgedExtensions: result.runtimeAcknowledgedExtensions } : {}),
-				...(result.capabilityCeiling ? { capabilityCeiling: result.capabilityCeiling } : {}),
-				...(result.capabilityAudit ? { capabilityAudit: result.capabilityAudit } : {}),
-			};
+			const child = rememberedForegroundChild(input, result, index, resolveSubagentResultStatus(omitUndefinedProperties({
+				exitCode: result.exitCode,
+				interrupted: result.interrupted,
+				detached: result.detached,
+				processSignal: result.processSignal,
+				timedOut: result.timedOut,
+				stopped: result.stopped,
+				turnBudgetExceeded: result.turnBudgetExceeded,
+			})), updatedAt);
 			const recovered = previous?.children[index];
 			return child.status === "detached" && recovered && recovered.status !== "detached" ? recovered : child;
 		}),
 	});
 	trimRememberedForegroundRuns(state);
-	persistRememberedForegroundRuns(state);
+	persistRememberedForegroundRun(state, input.runId);
+}
+
+/**
+ * Saves a starting single run to its history file only, so a Pi exit before the run ends leaves a
+ * record that loads as stopped and resumable. The final save replaces it by run id.
+ */
+function rememberRunningForegroundRun(input: RememberedForegroundRunInput & { child: Partial<SingleResult> & Pick<SingleResult, "agent">; parentWorkflowRunId?: string }): void {
+	const updatedAt = Date.now();
+	try {
+		persistForegroundRun({
+			runId: input.runId,
+			mode: "single",
+			cwd: input.cwd,
+			...(input.sessionId ? { sessionId: input.sessionId } : {}),
+			updatedAt,
+			children: [rememberedForegroundChild(input, input.child, 0, "running", updatedAt)],
+			ownerPid: process.pid,
+			...omitUndefinedProperties({ ownerPidNamespaceScope: currentPidNamespaceScope(), ownerBootId: currentBootId(), parentWorkflowRunId: input.parentWorkflowRunId }),
+		});
+	} catch (error) {
+		console.error("Failed to persist running foreground run:", error);
+	}
 }
 
 function applyControlEventToRememberedForegroundRun(state: SubagentState, event: ControlEvent): void {
@@ -917,7 +950,7 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
 		...(input.result.capabilityAudit ? { capabilityAudit: input.result.capabilityAudit } : {}),
 	});
 	trimRememberedForegroundRuns(state);
-	persistRememberedForegroundRuns(state);
+	persistRememberedForegroundRun(state, input.runId);
 	const output = getSingleResultOutput(input.result).trim();
 	const success = terminalStatus === "completed";
 	const summary = !success && input.result.error
@@ -4335,6 +4368,14 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		: undefined;
 
 	const deadlineAt = data.deadlineAt ?? (data.timeoutMs !== undefined ? Date.now() + data.timeoutMs : undefined);
+	// A launch that ends without its final save drops the launch-time record, or it would later load as interrupted.
+	const discardRunningRecord = () => {
+		try {
+			discardRunningForegroundRun(runId);
+		} catch (discardError) {
+			console.error("Failed to discard running foreground run:", discardError);
+		}
+	};
 	let r: Awaited<ReturnType<typeof runSync>> | undefined;
 	let resolveDetachedWorkflowChild: ((result: Awaited<ReturnType<typeof runSync>>) => void) | undefined;
 	const detachedWorkflowChild = params.workflowAwaitDetached === true
@@ -4342,6 +4383,18 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		: undefined;
 	try {
 		const childSessionFile = sessionFileForTask(params.agent!, 0, modelOverride, modelOverrideFromParent, modelOrigin);
+		rememberRunningForegroundRun({
+			modelResponseAliases, runId, mode: "single", cwd: singleCwd, sessionId: data.parentSessionId, params, effectiveOutput, effectiveOutputMode, extensionBindings: params.extensionBindings, requiredExtensions,
+			child: omitUndefinedProperties({
+				agent: params.agent!,
+				context: shouldForkAgent(contextPolicy, params.agent!) ? "fork" as const : "fresh" as const,
+				sessionFile: childSessionFile,
+				model: modelOverride,
+				thinking: resolveEffectiveThinking(modelOverride, thinkingOverrideForTask()),
+				capabilityCeiling: data.capabilityCeiling,
+			}),
+			parentWorkflowRunId: params.workflowParentRunId ?? foregroundControl?.parentWorkflowRunId,
+		});
 		const launched = await runSync(ctx.cwd, agents, params.agent!, task, compactOptional<Parameters<typeof runSync>[4]>({
 			machine: foregroundMachine,
 			parentProviderRegistry: ctx.modelRegistry,
@@ -4417,7 +4470,12 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				}
 				try {
 					if (worktreeSetup) {
-						await finalizeSingleWorktreeHandoff({ worktreeSetup, artifactsDir, runId, cwd: sourceCwd, agent: params.agent!, result, workflowKey: params.workflowKey, lane });
+						try {
+							await finalizeSingleWorktreeHandoff({ worktreeSetup, artifactsDir, runId, cwd: sourceCwd, agent: params.agent!, result, workflowKey: params.workflowKey, lane });
+						} catch (error) {
+							discardRunningRecord();
+							throw error;
+						}
 					}
 					try {
 						updateRememberedForegroundChild(deps.state, { runId, mode: "single", cwd: singleCwd, sessionId: data.parentSessionId, index: 0, result, events: deps.pi.events, notify: true });
@@ -4470,6 +4528,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		}
 		r = launched.detached && detachedWorkflowChild ? await detachedWorkflowChild : launched;
 	} catch (error) {
+		discardRunningRecord();
 		await cleanupSingleWorktree();
 		throw error;
 	} finally {
@@ -4483,9 +4542,14 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	}
 	let worktreeHandoff: Awaited<ReturnType<typeof finalizeSingleWorktreeHandoff>> | undefined;
 	if (worktreeSetup) {
-		worktreeHandoff = r.detached
-			? { suffix: pendingHandoff ? formatParallelHandoffReference(pendingHandoff) : "", reference: pendingHandoff }
-			: await finalizeSingleWorktreeHandoff({ worktreeSetup, artifactsDir, runId, cwd: sourceCwd, agent: params.agent!, result: r, workflowKey: params.workflowKey, lane });
+		try {
+			worktreeHandoff = r.detached
+				? { suffix: pendingHandoff ? formatParallelHandoffReference(pendingHandoff) : "", reference: pendingHandoff }
+				: await finalizeSingleWorktreeHandoff({ worktreeSetup, artifactsDir, runId, cwd: sourceCwd, agent: params.agent!, result: r, workflowKey: params.workflowKey, lane });
+		} catch (error) {
+			discardRunningRecord();
+			throw error;
+		}
 	}
 
 	if (r.progress) allProgress.push(r.progress);
@@ -5661,6 +5725,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					...(workflowSessionRoot ? { sessionRoot: workflowSessionRoot } : {}),
 					...(requestParams.scheduleOrigin ? { scheduleOrigin: requestParams.scheduleOrigin } : {}),
 					pid: process.pid,
+					...omitUndefinedProperties({ pidNamespaceScope: currentPidNamespaceScope(), bootId: currentBootId() }),
 					...(workflowCapabilityCeiling ? { admissionCapabilityCeiling: workflowCapabilityCeiling } : {}),
 					steps: [],
 					...(workflowPreflight ? { preflight: workflowPreflight } : {}),

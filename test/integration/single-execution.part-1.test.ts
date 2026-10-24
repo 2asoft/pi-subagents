@@ -21,7 +21,7 @@ import assert from "node:assert/strict";
 import fsDefault, * as fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	createEventBus,
@@ -47,7 +47,7 @@ import {
 	type SubagentDelegationStarted,
 } from "../../src/api/delegation.ts";
 import { CHAIN_RUNS_DIR, DIRS, INTERCOM_DETACH_REQUEST_EVENT, INTERCOM_DETACH_RESPONSE_EVENT, SUBAGENT_CONTROL_EVENT, SUBAGENT_PROCESS_TERMINAL_EVENT, TEMP_ARTIFACTS_DIR, type AsyncStatus, type ChildWatchdogProgress, type ControlEvent, type SubagentState } from "../../src/shared/types.ts";
-import { ACTIVE_RUN_INDEX_DIR } from "../../src/runs/background/active-run-index.ts";
+import { ACTIVE_RUN_INDEX_DIR, updateActiveRunIndex } from "../../src/runs/background/active-run-index.ts";
 import { encodeIndexSegment } from "../../src/runs/background/index-segment.ts";
 import { removeResultIndex, writeAsyncResultFile, writePendingAsyncResultFile } from "../../src/runs/background/result-files.ts";
 import { listAsyncRuns } from "../../src/runs/background/async-status.ts";
@@ -2042,6 +2042,58 @@ Answer only from the supplied synthetic text.
 			return { start, launch, waitFor, settled, stopWhenStage2Starts, stopAction };
 		};
 		const resultFileText = (runId: string) => fs.readFileSync(path.join(DIRS.results, `${runId}.json`), "utf-8");
+		// What a killed Pi leaves behind for a live run: status still `running` under a pid that is gone,
+		// the child journal as written so far, and the active-run marker. The copy belongs to `sessionId`.
+		const crashedCopy = (sourceRunId: string, sessionId: string) => {
+			const runId = `crashed-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`;
+			const asyncDir = path.join(DIRS.async, runId);
+			const { toolCallId: _toolCallId, ...status } = readStatusFile(sourceRunId);
+			assert.equal(status.state, "running");
+			const exitedPid = spawnSync(process.execPath, ["-e", ""]).pid;
+			assert.ok(exitedPid);
+			fs.mkdirSync(asyncDir, { recursive: true });
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({ ...status, runId, sessionId, pid: exitedPid }));
+			fs.copyFileSync(path.join(DIRS.async, sourceRunId, "workflow-children.jsonl"), path.join(asyncDir, "workflow-children.jsonl"));
+			updateActiveRunIndex(asyncDir, "running");
+			return runId;
+		};
+		// Session start for the reopened session reconciles its active runs (restoreActiveJobs → listAsyncRuns).
+		const reopenSession = (sessionId: string) => listAsyncRuns(DIRS.async, { states: ["queued", "running"], sessionId, resultsDir: DIRS.results });
+		const stage2Started = (status: AsyncStatus) => status.workflow?.trace.some((entry) => entry.key === "stage2" && entry.state === "started") ?? false;
+
+		it("reuses a crashed workflow's finished stage through reuseFrom and after its session reopens, across two crashes", { timeout: 90_000, skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+			const nonce = `owner-exited-twice-${Date.now()}`;
+			const script = `const first = await runs.run("stage1", { agent: "echo", task: "Stage one ${nonce}" }); const second = await runs.run("stage2", { agent: "echo", task: "Stage two ${nonce}" }); return { first: first.output, second: second.output, reused: first.reused === true };`;
+			const args = { nonce };
+			const donorSession = `session-donor-${nonce}`;
+			const secondCrashSession = `session-second-crash-${nonce}`;
+			const { launch, waitFor, settled, stopWhenStage2Starts } = setup();
+			mockPi.onCall({ matchArgIncludes: `Stage one ${nonce}`, output: "stage one done" });
+			mockPi.onCall({ matchArgIncludes: `Stage two ${nonce}`, hangUntilAbort: true });
+			const donorId = await launch({ workflowScript: script, args }, donorSession);
+			await waitFor(donorId, stage2Started);
+			const firstCrashId = crashedCopy(donorId, `session-first-crash-${nonce}`);
+			await stopWhenStage2Starts(donorId, new Error("Stopped by user."));
+			const callsAfterFirstCrash = mockPi.callCount();
+
+			// From another session, and without reopening the crashed one: reuseFrom reconciles the run itself.
+			mockPi.onCall({ matchArgIncludes: `Stage two ${nonce}`, hangUntilAbort: true });
+			const firstRelaunchId = await launch({ workflowScript: script, args, reuseFrom: firstCrashId }, donorSession);
+			const firstRelaunch = await waitFor(firstRelaunchId, stage2Started);
+			assert.equal(firstRelaunch.workflow?.reusedFrom, firstCrashId);
+			assert.equal(readStatusFile(firstCrashId).workflow?.stopCause, "owner-exited");
+			const secondCrashId = crashedCopy(firstRelaunchId, secondCrashSession);
+			await stopWhenStage2Starts(firstRelaunchId, new Error("Stopped by user."));
+			assert.equal(mockPi.callCount(), callsAfterFirstCrash + 1, "the first relaunch launched only stage2");
+
+			reopenSession(secondCrashSession);
+			mockPi.onCall({ matchArgIncludes: `Stage two ${nonce}`, output: "stage two done" });
+			const third = await settled(await launch({ workflowScript: script, args }, secondCrashSession));
+			assert.equal(third.state, "complete", third.error);
+			assert.equal(third.workflow?.reusedFrom, secondCrashId);
+			assert.deepEqual(third.workflow?.value, { first: "stage one done", second: "stage two done", reused: true });
+			assert.equal(mockPi.callCount(), callsAfterFirstCrash + 2, "stage1 never launches again");
+		});
 
 		it("records the stop cause and script digest, then reuses the finished stage on relaunch", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 			const nonce = `reuse-${Date.now()}`;
@@ -2238,7 +2290,7 @@ Answer only from the supplied synthetic text.
 			for (const [params, expected] of [
 				[{ reuseFrom: "no-such-run" }, "options.reuseFrom: workflow run 'no-such-run' was not found."],
 				[{ reuseFrom: `../${path.basename(DIRS.async)}/${firstId}` }, `options.reuseFrom: workflow run '../${path.basename(DIRS.async)}/${firstId}' was not found.`],
-				[{ reuseFrom: plainId }, `options.reuseFrom: workflow run '${plainId}' did not stop because its session was replaced, so its children cannot be reused.`],
+				[{ reuseFrom: plainId }, `options.reuseFrom: workflow run '${plainId}' did not stop because its session was replaced or its Pi process exited, so its children cannot be reused.`],
 				[{ workflowScript: `${script}\n// changed`, reuseFrom: firstId }, `options.reuseFrom: workflow run '${firstId}' ran a different workflow script.`],
 				[{ reuseFrom: firstId, cwd: otherCwd }, `options.reuseFrom: workflow run '${firstId}' ran in '${tempDir}', not '${otherCwd}'.`],
 				[{ reuseFrom: firstId, async: false }, "options.reuseFrom requires an async top-level workflow."],
